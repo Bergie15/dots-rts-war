@@ -5,12 +5,11 @@ A minimalist real-time strategy game in one HTML file. Blue dots against red dot
 Open `index.html` in any browser (phone or desktop). No build step.
 
 ## How to play
-- **Drag a path** from a blue base. Troops march along the line you draw.
-- End the path on a base to **attack or reinforce** it; end it in open ground to hold position.
-- **Drag from your troops** in the field to redirect them. Blue and red dots that meet trade one for one.
-- Or **tap a base, then tap a target** to send troops along the quickest route.
-- Rivers slow troops to a crawl. Bridges don't.
-- **SEND** toggles 25% / 50% / 100% of a base's garrison.
-- **AIRSTRIKE** bombs an area after a short delay. **SUPPLY +12** adds troops to one of your bases.
+- Your bases keep adding **blue dots** to the map around them. No numbers to pick.
+- **Drag from a group of dots** (or from your base to grab its whole crowd) and draw a path. They march along your line.
+- End the path on a base to **capture** it (gray number = its defense), or anywhere to hold ground.
+- Or **tap a group, then tap where to go**. They take the quickest route.
+- Blue and red dots that meet trade one for one. Rivers slow dots to a crawl; bridges don't.
+- **AIRSTRIKE** bombs an area after a short delay. **SUPPLY +12** drops 12 dots at one of your bases.
 
-Win by wiping out the red army, or by having more troops when the 3:00 clock runs out. Three enemy commanders: Recruit, Captain, General.
+Win by wiping out the red army, or by holding more bases when the 3:00 clock runs out (dot count breaks ties). Three enemy commanders: Recruit, Captain, General.

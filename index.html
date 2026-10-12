@@ -147,7 +147,7 @@ body {
 
   <div id="stage">
     <canvas id="cv"></canvas>
-    <div id="hint">Drag from your blue dots to send them</div>
+    <div id="hint">Drag a blue unit to move it</div>
 
     <div class="overlay" id="menu">
       <div class="card">
@@ -166,8 +166,8 @@ body {
         </div>
         <ul class="howto">
           <li><span>1</span><span>A light runs around each base. When it closes the ring, a new <b>blue dot</b> steps out.</span></li>
-          <li><span>2</span><span><b>Drag from a group of dots</b> and draw a path. They march along your line.</span></li>
-          <li><span>3</span><span>End on a base to <b>capture</b> it, or anywhere to hold ground. Or tap a group, then tap where to go.</span></li>
+          <li><span>2</span><span><b>Drag a unit</b> and draw a path. It marches along your line.</span></li>
+          <li><span>3</span><span>End on a base to <b>capture</b> it, or anywhere to hold ground. Or tap a unit, then tap where it should go.</span></li>
           <li><span>4</span><span>Dots <b>shoot</b> enemies in range and dig in when they stand still. <b>Hills</b> give range and cover, water slows, rock blocks. Your HQ also builds <b>tanks</b>.</span></li>
         </ul>
         <button class="btn" id="playBtn">Deploy</button>
@@ -197,9 +197,9 @@ body {
       <svg viewBox="0 0 26 26" aria-hidden="true"><path fill="#ffc93c" d="M13 1l2.2 8.3H24l-7 5.2 2.7 8.5L13 17.8 6.3 23l2.7-8.5-7-5.2h8.8z"/><circle cx="13" cy="13" r="3.4" fill="#e5423a"/></svg>
       <span>AIRSTRIKE</span><div class="cd"></div><div class="cdnum"></div>
     </button>
-    <button class="tool" id="tSupply" aria-label="Supply drop: tap one of your bases to add 5 dots">
+    <button class="tool" id="tSupply" aria-label="Supply drop: tap one of your bases to add 3 units">
       <svg viewBox="0 0 26 26" aria-hidden="true"><path fill="#c98a4b" d="M4 9h18v14H4z"/><path fill="#8a5a2b" d="M4 9h18v3H4zM11.5 9h3v14h-3z"/><path fill="#f4f7ff" d="M7 2h12l3 7H4z"/></svg>
-      <span>SUPPLY +5</span><div class="cd"></div><div class="cdnum"></div>
+      <span>SUPPLY +3</span><div class="cd"></div><div class="cdnum"></div>
     </button>
   </div>
 </div>
@@ -215,11 +215,11 @@ const PAL = {
   1: { main: '#2f6ee6', dark: '#163a8c', light: '#9cc0ff' },
   2: { main: '#e5423a', dark: '#8c1a16', light: '#ffa49d' },
 };
-const SPEED = 40;            // world units per second
-// Unit kinds. Tanks come out of the HQ every fourth spawn.
+const SPEED = 30;            // world units per second (about 5% of the screen width)
+// Unit kinds. Tanks come out of the HQ every third spawn.
 const UNIT = {
-  inf:  { hp: 3, dmg: 1, range: 95,  fire: 1.0, speed: 1,    size: 26 },
-  tank: { hp: 8, dmg: 2, range: 120, fire: 1.6, speed: 0.62, size: 40 },
+  inf:  { hp: 3, dmg: 1, range: 110, fire: 1.0, speed: 1,    size: 34 },
+  tank: { hp: 8, dmg: 2, range: 135, fire: 1.6, speed: 0.6,  size: 52 },
 };
 const CELL = 150;            // combat grid; larger than the longest range
 const HILL_RANGE = 1.2, HILL_ARMOR = 0.75;   // high ground: longer range, less damage taken
@@ -227,19 +227,18 @@ const DIG_IN = 1.5;          // seconds standing still before a dot gets its shi
 const MATCH_TIME = 180;
 const RIVER_HALF = 24;
 const BRIDGES = [130, 470];
-const TEAM_CAP = 50;         // most dots one army can field
+const TEAM_CAP = 14;         // most units one army can field
 // hp: shield an owned base regains; crowd: dots a base keeps around itself before it stops producing
 const TYPES = {
-  hq:      { r: 36, hp: 10, crowd: 14, rate: 2.0 },
-  town:    { r: 30, hp: 6,  crowd: 10, rate: 3.0 },
-  outpost: { r: 24, hp: 4,  crowd: 8,  rate: 4.0 },
+  hq:      { r: 44, hp: 10, crowd: 4, rate: 8 },
+  town:    { r: 40, hp: 6,  crowd: 3, rate: 10 },
+  outpost: { r: 32, hp: 4,  crowd: 2, rate: 13 },
 };
 const DIFF = {
   easy:   { think: 3.4, prod: 0.8,  frac: 0.6,  strike: 0,  greed: 2 },
   normal: { think: 2.1, prod: 1.0,  frac: 0.75, strike: 38, greed: 1 },
   hard:   { think: 1.25, prod: 1.2, frac: 0.85, strike: 26, greed: 0 },
 };
-const GRAB_R = 60;           // how far from your finger dots get picked up
 
 // Terrain for the bottom half; the top half mirrors it.
 const mirror = list => list.concat(list.map(o => ({ ...o, x: W - o.x, y: H - o.y })));
@@ -280,8 +279,8 @@ function mulberry(seed) {
 // Bottom half of the map; the top half is the same map rotated 180°.
 // For owned bases `start` is the dots they begin with; for neutral ones it is their shield.
 const LAYOUT = [
-  { x: 400, y: 880, type: 'hq',      own: true,  start: 6 },
-  { x: 150, y: 760, type: 'town',    own: true,  start: 3 },
+  { x: 400, y: 880, type: 'hq',      own: true,  start: 3 },
+  { x: 150, y: 760, type: 'town',    own: true,  start: 2 },
   { x: 470, y: 650, type: 'outpost', own: false, start: 5 },
 ];
 
@@ -310,7 +309,7 @@ function newGame() {
   aiTimer = 2.5; aiStrikeCd = DIFF[difficulty].strike || Infinity;
   strikeCd = 8; supplyCd = 6; armed = null; selected = null; drag = null;
   stats = { killed: 0, lost: 0, captured: 0 };
-  hintEl.hidden = false; hintEl.textContent = 'Drag from your blue dots to send them';
+  hintEl.hidden = false; hintEl.textContent = 'Drag a blue unit to move it';
   syncTools();
   computeField();
 }
@@ -323,14 +322,14 @@ function mkBase(x, y, type, owner) {
 // ---------- Dots ----------
 // A free spot in the ring of dots around a base (golden-angle spiral).
 function slotNear(b) {
-  for (let k = 0, ring = 0, R = b.r + 25, i = 0; i < 80; i++, k++) {
-    const cap = Math.floor(2 * Math.PI * R / 27);
-    if (k >= cap) { k = 0; ring++; R += 25; }
+  for (let k = 0, ring = 0, R = b.r + 32, i = 0; i < 80; i++, k++) {
+    const cap = Math.floor(2 * Math.PI * R / 42);
+    if (k >= cap) { k = 0; ring++; R += 40; }
     const a = k / cap * Math.PI * 2 + ring * 0.5 + b.x;
     let x = clamp(b.x + Math.cos(a) * R, 14, W - 14), y = clamp(b.y + Math.sin(a) * R, 14, H - 14);
     if (inWater(x, y)) continue;
     if (inMountain(x, y, 16)) continue;
-    if (dots.some(d => d.team === b.owner && d.idle && Math.abs(d.hx - x) < 14 && Math.abs(d.hy - y) < 14)) continue;
+    if (dots.some(d => d.team === b.owner && d.idle && Math.abs(d.hx - x) < 22 && Math.abs(d.hy - y) < 22)) continue;
     return { x, y };
   }
   return { x: b.x + (Math.random() - 0.5) * 80, y: b.y + (Math.random() - 0.5) * 80 };
@@ -349,7 +348,7 @@ function spawnAt(b, instant, kind = 'inf') {
 }
 function makeRoute(team, pts, target, expected) {
   pts = pts.map((p, i) => (i === pts.length - 1 && target) ? p : pushOut({ x: p.x, y: p.y }, 14, 1));
-  const r = { team, pts, target, n: 0, spread: 6 + 11 * Math.sqrt(Math.max(1, expected)) };
+  const r = { team, pts, target, n: 0, spread: 6 + 16 * Math.sqrt(Math.max(1, expected)) };
   routes.push(r);
   return r;
 }
@@ -367,8 +366,9 @@ function sendGroup(team, group, pts, target) {
     releaseDot(d);
     const a = Math.random() * Math.PI * 2, rr = Math.sqrt(Math.random());
     const b = Math.random() * Math.PI * 2, rb = Math.sqrt(Math.random()) * route.spread;
-    d.ox = Math.cos(a) * rr * 10; d.oy = Math.sin(a) * rr * 10;
-    d.ex = Math.cos(b) * rb; d.ey = Math.sin(b) * rb;
+    const solo = group.length === 1 ? 0 : 1;
+    d.ox = Math.cos(a) * rr * 12 * solo; d.oy = Math.sin(a) * rr * 12 * solo;
+    d.ex = Math.cos(b) * rb * solo; d.ey = Math.sin(b) * rb * solo;
     d.route = route; route.n++; d.pi = 0; d.idle = false; d.delay = i * 0.22;
   });
 }
@@ -392,7 +392,7 @@ function autoRoute(a, b) {
 function routeLength(pts) { let L = 0; for (let i = 1; i < pts.length; i++) L += dist(pts[i - 1], pts[i]); return L; }
 function centroid(g) { let x = 0, y = 0; for (const d of g) { x += d.x; y += d.y; } return { x: x / g.length, y: y / g.length }; }
 function groupAt(team, p, r) { return dots.filter(d => d.team === team && Math.hypot(d.x - p.x, d.y - p.y) < r); }
-function clusterOf(b, team) { return dots.filter(d => d.team === team && d.idle && Math.hypot(d.x - b.x, d.y - b.y) < b.r + 75); }
+function clusterOf(b, team) { return dots.filter(d => d.team === team && d.idle && Math.hypot(d.x - b.x, d.y - b.y) < b.r + 95); }
 
 function arrive(d, base) {
   releaseDot(d);
@@ -469,7 +469,7 @@ function aiThink() {
   // Defend: send help to a base about to fall.
   for (const [b, n] of threat) {
     if (n >= b.hp + clusterOf(b, RED).length) {
-      const helper = mine.filter(m => m !== b && clusterOf(m, RED).length >= 3).sort((p, q) => dist(p, b) - dist(q, b))[0];
+      const helper = mine.filter(m => m !== b && clusterOf(m, RED).length >= 2).sort((p, q) => dist(p, b) - dist(q, b))[0];
       if (helper && Math.random() < 0.7) {
         const g = clusterOf(helper, RED);
         sendGroup(RED, g.slice(0, Math.ceil(g.length * 0.7)), autoRoute(helper, b), b);
@@ -481,7 +481,7 @@ function aiThink() {
   let best = null;
   for (const a of mine) {
     const g = clusterOf(a, RED);
-    if (g.length < 3) continue;
+    if (g.length < 2) continue;
     const avail = Math.floor(g.length * cfg.frac);
     for (const t of bases) {
       if (t.owner === RED) continue;
@@ -507,14 +507,14 @@ function aiThink() {
 function nearest(p, list) { let m = Infinity; for (const q of list) m = Math.min(m, dist(p, q)); return m; }
 function aiStrike() {
   const blues = dots.filter(d => !d.dead && d.team === BLUE);
-  if (blues.length < 5) return false;
+  if (blues.length < 4) return false;
   let best = null, bn = 0;
   for (let i = 0; i < Math.min(50, blues.length); i++) {
     const c = blues[(Math.random() * blues.length) | 0];
     let n = 0; for (const d of blues) if (Math.hypot(d.x - c.x, d.y - c.y) < 60) n++;
     if (n > bn) { bn = n; best = c; }
   }
-  if (bn >= 5) { launchStrike(RED, best.x, best.y); return true; }
+  if (bn >= 4) { launchStrike(RED, best.x, best.y); return true; }
   return false;
 }
 
@@ -523,8 +523,9 @@ function aiStrike() {
 const GS = 20, GX = W / GS + 1, GY = H / GS + 1;
 const vis = new Float32Array(GX * GY), inf = new Float32Array(GX * GY);
 let frontSegs = [], fieldTimer = 0;
-const fogCv = document.createElement('canvas'); fogCv.width = GX; fogCv.height = GY;
-const fogCtx = fogCv.getContext('2d'), fogImg = fogCtx.createImageData(GX, GY);
+const FP = 24;               // fog cells drawn past each map edge, copying the edge
+const fogCv = document.createElement('canvas'); fogCv.width = GX + FP * 2; fogCv.height = GY + FP * 2;
+const fogCtx = fogCv.getContext('2d'), fogImg = fogCtx.createImageData(fogCv.width, fogCv.height);
 function addPresence(x, y, team, seeR, holdR, w) {
   const Rr = Math.max(seeR, holdR);
   const i0 = Math.max(0, Math.floor((x - Rr) / GS)), i1 = Math.min(GX - 1, Math.ceil((x + Rr) / GS));
@@ -541,8 +542,11 @@ function computeField() {
   for (const b of bases) if (b.owner !== NEUTRAL) addPresence(b.x, b.y, b.owner, 175, 175, 2);
   for (const d of dots) addPresence(d.x, d.y, d.team, d.kind === 'tank' ? 145 : 130, 120, d.kind === 'tank' ? 1.5 : 1);
   const px = fogImg.data;
-  for (let k = 0; k < vis.length; k++) {
-    px[k * 4] = 16; px[k * 4 + 1] = 28; px[k * 4 + 2] = 2; px[k * 4 + 3] = (1 - vis[k]) * 178;
+  const FW = fogCv.width;
+  for (let y = 0; y < fogCv.height; y++) for (let x = 0; x < FW; x++) {
+    const v = vis[clamp(y - FP, 0, GY - 1) * GX + clamp(x - FP, 0, GX - 1)];
+    const o = (y * FW + x) * 4;
+    px[o] = 16; px[o + 1] = 28; px[o + 2] = 2; px[o + 3] = (1 - v) * 178;
   }
   fogCtx.putImageData(fogImg, 0, 0);
   // Front line: marching squares on the zero contour where both armies have presence.
@@ -600,7 +604,7 @@ function update(dt) {
     if (b.prog >= 1) {
       b.prog -= 1; b.ring = 1; b.near++; count[b.owner]++;
       b.made++;
-      const d = spawnAt(b, false, b.type === 'hq' && b.made % 4 === 0 ? 'tank' : 'inf');
+      const d = spawnAt(b, false, b.type === 'hq' && b.made % 3 === 0 ? 'tank' : 'inf');
       d.x = b.x; d.y = b.y - b.r - 7;    // the new dot pops out where the light closes the ring
     }
   }
@@ -739,7 +743,8 @@ function resize() {
   dpr = Math.min(window.devicePixelRatio || 1, 2.5);
   cv.width = Math.max(1, Math.round(r.width * dpr));
   cv.height = Math.max(1, Math.round(r.height * dpr));
-  scale = Math.min(r.width / W, r.height / H);
+  const fit = Math.min(r.width / W, r.height / H), fill = Math.max(r.width / W, r.height / H);
+  scale = Math.min(fill, fit * 1.08);
   offX = (r.width - W * scale) / 2; offY = (r.height - H * scale) / 2;
   buildBackground();
   buildSprites();
@@ -775,7 +780,9 @@ function buildSprites() {
 function buildBackground() {
   bg = document.createElement('canvas'); bg.width = cv.width; bg.height = cv.height;
   const g = bg.getContext('2d');
-  g.fillStyle = '#8fb52c'; g.fillRect(0, 0, bg.width, bg.height);
+  g.fillStyle = '#a3c935'; g.fillRect(0, 0, bg.width, bg.height);
+  g.strokeStyle = 'rgba(70,100,10,.35)'; g.lineWidth = 6 * dpr;   // out-of-bounds hatching
+  for (let x = -bg.height; x < bg.width; x += 22 * dpr) { g.beginPath(); g.moveTo(x, bg.height); g.lineTo(x + bg.height, 0); g.stroke(); }
   g.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * offX, dpr * offY);
   const rnd = mulberry(11);
   const ell = (x, y, rx, ry) => { g.beginPath(); g.ellipse(x, y, rx, ry, 0, 0, 7); g.fill(); };
@@ -911,7 +918,7 @@ function draw(now) {
   const hl = drag ? drag.dots : selected ? selected.dots : null;
   if (hl) {
     ctx.fillStyle = 'rgba(255,255,255,' + (0.5 + Math.sin(T * 8) * 0.15) + ')';
-    for (const d of hl) if (!d.dead) { ctx.beginPath(); ctx.arc(d.x, d.y, 16, 0, 7); ctx.fill(); }
+    for (const d of hl) if (!d.dead) { ctx.beginPath(); ctx.arc(d.x, d.y, d.u.size * 0.62, 0, 7); ctx.fill(); }
   }
 
   // dots
@@ -926,7 +933,7 @@ function draw(now) {
   // health bars, high-ground chevrons and dig-in shields
   for (const d of dots) {
     if (!d.show) continue;
-    const hw = d.kind === 'tank' ? 30 : 22, bx = d.x - hw / 2, by = d.y - d.u.size / 2 - 8;
+    const hw = d.kind === 'tank' ? 38 : 28, bx = d.x - hw / 2, by = d.y - d.u.size / 2 - 8;
     ctx.fillStyle = 'rgba(10,16,36,.7)'; ctx.fillRect(bx - 1, by - 1, hw + 2, 5);
     const f = clamp(d.hp / d.u.hp, 0, 1);
     ctx.fillStyle = f > 0.6 ? '#5ee05a' : f > 0.3 ? '#ffd23c' : '#ff5a4a';
@@ -957,7 +964,7 @@ function draw(now) {
 
   // fog of war over everything blue cannot see
   ctx.imageSmoothingEnabled = true;
-  ctx.drawImage(fogCv, -GS / 2, -GS / 2, GX * GS, GY * GS);
+  ctx.drawImage(fogCv, -GS / 2 - FP * GS, -GS / 2 - FP * GS, fogCv.width * GS, fogCv.height * GS);
 
   // strikes
   for (const s of strikes) {
@@ -1119,11 +1126,15 @@ function baseAt(p, pad) {
 }
 function targetAt(p, exclude) { const b = baseAt(p, 20); return b && b !== exclude ? b : null; }
 
-// Grab blue dots under the finger. On one of your bases, grab its whole crowd.
+// Grab the one blue unit under the finger.
 function grab(p) {
-  const b = baseAt(p, 10);
-  if (b && b.owner === BLUE) return { base: b, dots: groupAt(BLUE, b, b.r + 75) };
-  return { base: null, dots: groupAt(BLUE, p, GRAB_R) };
+  let best = null, bd = Infinity;
+  for (const d of dots) {
+    if (d.team !== BLUE) continue;
+    const L = Math.hypot(d.x - p.x, d.y - p.y);
+    if (L < d.u.size / 2 + 16 && L < bd) { bd = L; best = d; }
+  }
+  return { base: null, dots: best ? [best] : [] };
 }
 
 cv.addEventListener('pointerdown', e => {
@@ -1136,9 +1147,9 @@ cv.addEventListener('pointerdown', e => {
   if (armed === 'supply') {
     const b = baseAt(p, 16);
     if (b && b.owner === BLUE) {
-      for (let i = 0; i < 5; i++) spawnAt(b);
+      for (let i = 0; i < 3; i++) spawnAt(b);
       b.pulse = 1; supplyCd = SUPPLY_CD; armed = null;
-      floater(b.x, b.y - b.r - 16, '+5', '#ffffff'); burst(b.x, b.y, '#ffe08a', 14);
+      floater(b.x, b.y - b.r - 16, '+3', '#ffffff'); burst(b.x, b.y, '#ffe08a', 14);
       syncTools();
     } else { flashHint('Tap one of your blue bases for the supply drop'); }
     return;
@@ -1152,7 +1163,8 @@ cv.addEventListener('pointerdown', e => {
     return;
   }
   if (g.dots.length) { drag = { dots: g.dots, base: g.base, pts: [g.base ? { x: g.base.x, y: g.base.y } : p], len: 0 }; return; }
-  if (g.base) flashHint('No dots here yet. Your base is building them.');
+  const b = baseAt(p, 10);
+  if (b && b.owner === BLUE) flashHint('Drag one of your units to move it');
 });
 cv.addEventListener('pointermove', e => {
   if (!drag) return;
@@ -1170,7 +1182,7 @@ const endDrag = () => {
   if (dr.len < 24) {                      // a tap: select or deselect the group
     if (dr.reselect) { selected = null; return; }
     selected = group.length ? { dots: group, base: dr.base } : null;
-    if (selected) flashHint('Tap where to send them');
+    if (selected) flashHint('Tap where to send it');
     return;
   }
   selected = null;

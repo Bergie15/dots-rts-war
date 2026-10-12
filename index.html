@@ -1,0 +1,1022 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Dots RTS War</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Nunito:wght@600;800&display=swap">
+<style>
+/* Layout: one-screen game — top status strip, battlefield canvas, bottom command tray. Single "toy battlefield" look, deliberately one theme. */
+:root {
+  --ink: #16203a;        /* command panels */
+  --ink-2: #24315a;
+  --paper: #f4f7ff;      /* text on panels */
+  --muted: #9fb0d8;
+  --blue: #2f6ee6;
+  --blue-deep: #163a8c;
+  --red: #e5423a;
+  --red-deep: #8c1a16;
+  --gold: #ffc93c;
+  --grass: #7fbf55;
+  --font-display: "Lilita One", "Arial Rounded MT Bold", "Trebuchet MS", sans-serif;
+  --font-body: "Nunito", "Segoe UI", system-ui, sans-serif;
+  color-scheme: dark;
+}
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--font-body);
+  overflow: hidden;
+  overscroll-behavior: none;
+  -webkit-user-select: none; user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+[hidden] { display: none !important; }
+#app { height: 100%; display: flex; flex-direction: column; }
+
+/* Top status strip */
+#top {
+  display: flex; align-items: center; gap: 10px;
+  padding: calc(8px + env(safe-area-inset-top, 0px)) 16px 8px;
+  background: var(--ink);
+}
+.icon-btn {
+  flex: none; width: 38px; height: 38px; border-radius: 10px;
+  border: 2px solid var(--ink-2); background: var(--ink-2); color: var(--paper);
+  display: grid; place-items: center; cursor: pointer; padding: 0;
+}
+.icon-btn:focus-visible, .tool:focus-visible, .btn:focus-visible, .seg button:focus-visible { outline: 3px solid var(--gold); outline-offset: 2px; }
+#bar {
+  flex: 1; min-width: 0; height: 26px; border-radius: 13px; overflow: hidden;
+  display: flex; border: 2px solid #0b1022; background: var(--red);
+  font-family: var(--font-display); font-size: 15px; letter-spacing: .02em;
+}
+#barBlue { background: linear-gradient(var(--blue), var(--blue-deep)); width: 50%; transition: width .4s ease; display: flex; align-items: center; padding-left: 10px; }
+#barRed { flex: 1; background: linear-gradient(var(--red), var(--red-deep)); display: flex; align-items: center; justify-content: flex-end; padding-right: 10px; }
+#timer {
+  flex: none; font-family: var(--font-display); font-size: 18px; min-width: 62px; text-align: center;
+  background: #0b1022; border-radius: 10px; padding: 6px 8px; font-variant-numeric: tabular-nums;
+}
+#timer.low { color: var(--gold); }
+
+/* Battlefield */
+#stage { position: relative; flex: 1; min-height: 0; background: var(--grass); }
+#cv { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; display: block; }
+#hint {
+  position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%);
+  background: rgba(22,32,58,.88); color: var(--paper); border-radius: 999px;
+  padding: 8px 16px; font-weight: 800; font-size: 14px; white-space: nowrap; pointer-events: none;
+  max-width: calc(100% - 32px); overflow: hidden; text-overflow: ellipsis;
+}
+
+/* Command tray */
+#tray {
+  display: flex; justify-content: center; gap: 10px;
+  padding: 8px 16px calc(10px + env(safe-area-inset-bottom, 0px));
+  background: var(--ink);
+}
+.tool {
+  position: relative; flex: 1; max-width: 120px; height: 62px; border-radius: 14px;
+  border: 2px solid #0b1022; background: linear-gradient(#34457a, var(--ink-2));
+  color: var(--paper); cursor: pointer; overflow: hidden; padding: 4px 4px 6px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  font-family: var(--font-body); font-weight: 800; font-size: 12px; letter-spacing: .03em;
+}
+.tool b { font-family: var(--font-display); font-weight: 400; font-size: 20px; letter-spacing: .02em; line-height: 1; }
+.tool svg { width: 26px; height: 26px; }
+.tool.armed { background: linear-gradient(#57b84a, #2f7d2a); border-color: var(--gold); }
+.tool .cd {
+  position: absolute; inset: 0; pointer-events: none;
+  background: conic-gradient(rgba(5,8,20,.72) calc(var(--p, 0) * 1turn), transparent 0);
+}
+.tool.cooling > svg, .tool.cooling > span { opacity: .3; }
+.tool .cdnum { position: absolute; inset: 0; display: grid; place-items: center; font-family: var(--font-display); font-size: 22px; pointer-events: none; }
+
+/* Overlays */
+.overlay {
+  position: absolute; inset: 0; z-index: 5; display: flex; align-items: center; justify-content: center;
+  padding: 16px; background: rgba(11,16,34,.72); backdrop-filter: blur(3px);
+}
+.card {
+  width: 100%; max-width: 380px; background: var(--ink); border: 3px solid #0b1022; border-radius: 22px;
+  padding: 22px 20px; display: flex; flex-direction: column; gap: 14px; box-shadow: 0 18px 40px rgba(0,0,0,.45);
+}
+.logo { font-family: var(--font-display); font-size: 46px; line-height: .95; margin: 0; text-align: center; letter-spacing: .01em; text-wrap: balance; }
+.logo .b { color: #6fa0ff; } .logo .r { color: #ff6a62; }
+.logo-dots { display: flex; justify-content: center; gap: 6px; }
+.logo-dots i { width: 14px; height: 14px; border-radius: 50%; display: block; box-shadow: inset -2px -3px 0 rgba(0,0,0,.25), inset 2px 2px 0 rgba(255,255,255,.35); }
+.sub { margin: 0; text-align: center; color: var(--muted); font-size: 14px; }
+.label { font-size: 12px; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); margin: 0 0 6px; }
+.seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.seg button {
+  height: 40px; border-radius: 10px; border: 2px solid var(--ink-2); background: var(--ink-2); color: var(--paper);
+  font-family: var(--font-body); font-weight: 800; font-size: 14px; cursor: pointer;
+}
+.seg button[aria-pressed="true"] { background: var(--blue); border-color: #8fb6ff; }
+.btn {
+  height: 54px; border-radius: 14px; border: 3px solid #0b1022; cursor: pointer;
+  background: linear-gradient(#ffd75e, #f0a91c); color: #3a2400;
+  font-family: var(--font-display); font-size: 24px; letter-spacing: .03em;
+}
+.btn.ghost { background: var(--ink-2); color: var(--paper); font-size: 18px; height: 46px; }
+.howto { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; font-size: 14px; line-height: 1.35; }
+.howto li { display: grid; grid-template-columns: 22px 1fr; gap: 8px; align-items: start; }
+.howto li span:first-child { width: 22px; height: 22px; border-radius: 50%; background: var(--ink-2); display: grid; place-items: center; font-family: var(--font-display); font-size: 13px; color: var(--gold); }
+.record { text-align: center; font-size: 13px; color: var(--muted); margin: 0; font-variant-numeric: tabular-nums; }
+.result { font-family: var(--font-display); font-size: 52px; text-align: center; margin: 0; line-height: 1; }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.stats div { background: var(--ink-2); border-radius: 12px; padding: 10px 6px; text-align: center; }
+.stats b { display: block; font-family: var(--font-display); font-weight: 400; font-size: 24px; font-variant-numeric: tabular-nums; }
+.stats small { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+@media (prefers-reduced-motion: reduce) { #barBlue { transition: none; } }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="top">
+    <button class="icon-btn" id="pauseBtn" aria-label="Pause and open menu">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M10 2 1 9.5h2.5V18h5v-5h3v5h5V9.5H19z"/></svg>
+    </button>
+    <div id="bar" role="img" aria-label="Army strength"><div id="barBlue">50</div><div id="barRed">50</div></div>
+    <div id="timer">3:00</div>
+  </div>
+
+  <div id="stage">
+    <canvas id="cv"></canvas>
+    <div id="hint">Drag from a blue base to send troops</div>
+
+    <div class="overlay" id="menu">
+      <div class="card">
+        <div class="logo-dots" aria-hidden="true">
+          <i style="background:#e5423a"></i><i style="background:#e5423a"></i><i style="background:#2f6ee6"></i><i style="background:#2f6ee6"></i>
+        </div>
+        <h1 class="logo"><span class="b">DOTS</span> RTS <span class="r">WAR</span></h1>
+        <p class="sub">Command the blue army. Take every base before the clock runs out.</p>
+        <div>
+          <p class="label">Enemy commander</p>
+          <div class="seg" id="diff">
+            <button id="d-easy" data-d="easy" aria-pressed="false">Recruit</button>
+            <button id="d-normal" data-d="normal" aria-pressed="true">Captain</button>
+            <button id="d-hard" data-d="hard" aria-pressed="false">General</button>
+          </div>
+        </div>
+        <ul class="howto">
+          <li><span>1</span><span><b>Drag a path</b> from a blue base. Troops march along the line you draw.</span></li>
+          <li><span>2</span><span>End the path on a base to <b>attack or reinforce</b> it. End it in the field to hold ground.</span></li>
+          <li><span>3</span><span>Drag from troops in the field to <b>redirect</b> them. Dots that meet trade one for one.</span></li>
+          <li><span>4</span><span>Rivers slow troops. Use the <b>bridges</b>.</span></li>
+        </ul>
+        <button class="btn" id="playBtn">Deploy</button>
+        <p class="record" id="record"></p>
+      </div>
+    </div>
+
+    <div class="overlay" id="end" hidden>
+      <div class="card">
+        <p class="result" id="resultTitle">Victory</p>
+        <p class="sub" id="resultSub"></p>
+        <div class="stats">
+          <div><b id="sKilled">0</b><small>Enemy dots</small></div>
+          <div><b id="sCaptured">0</b><small>Bases taken</small></div>
+          <div><b id="sTime">0:00</b><small>Battle time</small></div>
+        </div>
+        <div class="row">
+          <button class="btn ghost" id="menuBtn">Menu</button>
+          <button class="btn" id="againBtn">Again</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="tray">
+    <button class="tool" id="tSend" aria-label="Change how many troops a base sends">
+      <b id="sendPct">50%</b><span>SEND</span>
+    </button>
+    <button class="tool" id="tStrike" aria-label="Airstrike: tap the map to bomb enemy troops">
+      <svg viewBox="0 0 26 26" aria-hidden="true"><path fill="#ffc93c" d="M13 1l2.2 8.3H24l-7 5.2 2.7 8.5L13 17.8 6.3 23l2.7-8.5-7-5.2h8.8z"/><circle cx="13" cy="13" r="3.4" fill="#e5423a"/></svg>
+      <span>AIRSTRIKE</span><div class="cd"></div><div class="cdnum"></div>
+    </button>
+    <button class="tool" id="tSupply" aria-label="Supply drop: tap one of your bases to add 12 troops">
+      <svg viewBox="0 0 26 26" aria-hidden="true"><path fill="#c98a4b" d="M4 9h18v14H4z"/><path fill="#8a5a2b" d="M4 9h18v3H4zM11.5 9h3v14h-3z"/><path fill="#f4f7ff" d="M7 2h12l3 7H4z"/></svg>
+      <span>SUPPLY +12</span><div class="cd"></div><div class="cdnum"></div>
+    </button>
+  </div>
+</div>
+
+<script>
+(() => {
+'use strict';
+// ---------- World ----------
+const W = 600, H = 1000;
+const NEUTRAL = 0, BLUE = 1, RED = 2;
+const PAL = {
+  0: { main: '#a3a9b3', dark: '#5d646f', light: '#e4e8ee' },
+  1: { main: '#2f6ee6', dark: '#163a8c', light: '#9cc0ff' },
+  2: { main: '#e5423a', dark: '#8c1a16', light: '#ffa49d' },
+};
+const SPEED = 40;            // world units per second
+const EMIT = 0.07;           // seconds between dots leaving a base
+const HIT_R = 9;             // dots closer than this fight
+const MATCH_TIME = 180;
+const RIVER_HALF = 24;
+const BRIDGES = [130, 470];
+const TYPES = {
+  hq:      { r: 30, cap: 99, rate: 0.85 },
+  town:    { r: 22, cap: 50, rate: 1.45 },
+  outpost: { r: 17, cap: 30, rate: 2.2 },
+};
+const DIFF = {
+  easy:   { think: 3.4, prod: 0.8,  frac: 0.5, strike: 0,  greed: 4 },
+  normal: { think: 2.1, prod: 1.0,  frac: 0.6, strike: 38, greed: 2 },
+  hard:   { think: 1.25, prod: 1.2, frac: 0.7, strike: 26, greed: 0 },
+};
+
+const riverY = x => 500 + 70 * Math.sin((x - 300) / 600 * Math.PI * 2);
+const onBridge = x => BRIDGES.some(b => Math.abs(x - b) < 26);
+const inWater = (x, y) => Math.abs(y - riverY(x)) < RIVER_HALF && !onBridge(x);
+const sideOf = (x, y) => (y > riverY(x) ? 1 : -1);
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+function mulberry(seed) {
+  return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+}
+
+// Bottom half of the map; the top half is the same map rotated 180°.
+const LAYOUT = [
+  { x: 300, y: 910, type: 'hq',      own: true,  troops: 25 },
+  { x: 130, y: 800, type: 'town',    own: true,  troops: 10 },
+  { x: 470, y: 815, type: 'town',    own: false, troops: 12 },
+  { x: 300, y: 730, type: 'outpost', own: false, troops: 8 },
+  { x: 72,  y: 650, type: 'outpost', own: false, troops: 10 },
+  { x: 528, y: 668, type: 'outpost', own: false, troops: 10 },
+  { x: 195, y: 600, type: 'outpost', own: false, troops: 14 },
+];
+
+// ---------- State ----------
+let bases, dots, routes, orders, particles, floaters, strikes;
+let time, running = false, paused = true, over = false;
+let difficulty = 'normal';
+let sendFrac = 0.5;
+let aiTimer, aiStrikeCd;
+let strikeCd = 0, supplyCd = 0, armed = null; // 'strike' | 'supply'
+let selectedBase = null, drag = null;
+let stats;
+const STRIKE_CD = 25, SUPPLY_CD = 20;
+
+function newGame() {
+  bases = [];
+  for (const L of LAYOUT) {
+    bases.push(mkBase(L.x, L.y, L.type, L.own ? BLUE : NEUTRAL, L.troops));
+    bases.push(mkBase(W - L.x, H - L.y, L.type, L.own ? RED : NEUTRAL, L.troops));
+  }
+  dots = []; routes = []; orders = []; particles = []; floaters = []; strikes = [];
+  time = MATCH_TIME; over = false;
+  aiTimer = 2.5; aiStrikeCd = DIFF[difficulty].strike || Infinity;
+  strikeCd = 8; supplyCd = 6; armed = null; selectedBase = null; drag = null;
+  stats = { killed: 0, lost: 0, captured: 0 };
+  hintEl.hidden = false; hintEl.textContent = 'Drag from a blue base to send troops';
+  syncTools();
+}
+function mkBase(x, y, type, owner, troops) {
+  const t = TYPES[type];
+  return { x, y, type, r: t.r, cap: t.cap, rate: t.rate, owner, troops, prog: 0, flash: 0, pulse: 0 };
+}
+
+// ---------- Orders & dots ----------
+function makeRoute(team, pts, target, expected) {
+  const r = { team, pts, target, n: 0, pending: 0, spread: 6 + 3.2 * Math.sqrt(Math.max(1, expected)), born: performance.now() };
+  routes.push(r);
+  return r;
+}
+function issueOrder(base, pts, target, amount) {
+  const team = base.owner;
+  amount = Math.min(amount, base.troops);
+  if (amount <= 0) return;
+  const route = makeRoute(team, pts, target, amount);
+  route.pending = amount;
+  orders.push({ base, team, route, left: amount, t: 0 });
+}
+function spawnDot(team, base, route) {
+  const a = Math.random() * Math.PI * 2, rr = Math.sqrt(Math.random());
+  const b = Math.random() * Math.PI * 2, rb = Math.sqrt(Math.random()) * route.spread;
+  const d = { team, x: base.x + Math.cos(a) * base.r * 0.4, y: base.y + Math.sin(a) * base.r * 0.4,
+    ox: Math.cos(a) * rr * 7, oy: Math.sin(a) * rr * 7, ex: Math.cos(b) * rb, ey: Math.sin(b) * rb,
+    route, pi: 1, dead: false, idle: false, wob: Math.random() * 6 };
+  route.n++;
+  dots.push(d);
+}
+function assignRoute(d, route) {
+  if (d.route) d.route.n--;
+  const b = Math.random() * Math.PI * 2, rb = Math.sqrt(Math.random()) * route.spread;
+  d.route = route; d.pi = 0; d.idle = false; d.ex = Math.cos(b) * rb; d.ey = Math.sin(b) * rb;
+  route.n++;
+}
+function releaseDot(d) { if (d.route) { d.route.n--; } }
+
+function autoRoute(a, b) {
+  const pts = [{ x: a.x, y: a.y }];
+  const sa = sideOf(a.x, a.y), sb = sideOf(b.x, b.y);
+  if (sa !== sb) {
+    let best = null, bd = Infinity;
+    for (const bx of BRIDGES) {
+      const ry = riverY(bx);
+      const p1 = { x: bx, y: ry + sa * (RIVER_HALF + 16) }, p2 = { x: bx, y: ry - sa * (RIVER_HALF + 16) };
+      const d = dist(a, p1) + dist(p2, b);
+      if (d < bd) { bd = d; best = [p1, p2]; }
+    }
+    pts.push(...best);
+  }
+  pts.push({ x: b.x, y: b.y });
+  return pts;
+}
+function routeLength(pts) { let L = 0; for (let i = 1; i < pts.length; i++) L += dist(pts[i - 1], pts[i]); return L; }
+
+function arrive(d, base) {
+  d.dead = true; releaseDot(d);
+  if (base.owner === d.team) {
+    base.troops++;
+  } else if (base.troops > 0) {
+    base.troops--; base.flash = 0.25;
+    burst(base.x + (d.x - base.x) * 0.6, base.y + (d.y - base.y) * 0.6, PAL[d.team].main, 4);
+  } else {
+    const prev = base.owner;
+    base.owner = d.team; base.troops = 1; base.prog = 0; base.pulse = 1;
+    if (selectedBase === base) selectedBase = null;
+    if (d.team === BLUE) { stats.captured++; floater(base.x, base.y - base.r - 18, 'CAPTURED!', '#ffffff'); }
+    else floater(base.x, base.y - base.r - 18, prev === BLUE ? 'LOST!' : 'TAKEN', '#ffd4d1');
+    burst(base.x, base.y, PAL[d.team].light, 22);
+    // Orders from a base that changed hands stop.
+    for (const o of orders) if (o.base === base) { o.route.pending -= o.left; o.left = 0; }
+  }
+}
+
+// ---------- Effects ----------
+function burst(x, y, color, n) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2, s = 30 + Math.random() * 90;
+    particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.35 + Math.random() * 0.35, max: 0.7, color, size: 1.5 + Math.random() * 2.2 });
+  }
+}
+function floater(x, y, text, color) { floaters.push({ x, y, text, color, life: 1.4 }); }
+
+function launchStrike(team, x, y) {
+  strikes.push({ team, x, y, t: 0.9 });
+}
+function detonate(s) {
+  const R = 62;
+  for (const d of dots) {
+    if (!d.dead && d.team !== s.team && Math.hypot(d.x - s.x, d.y - s.y) < R) {
+      d.dead = true; releaseDot(d);
+      if (d.team === RED) stats.killed++; else stats.lost++;
+    }
+  }
+  for (const b of bases) {
+    if (b.owner !== s.team && b.owner !== NEUTRAL && Math.hypot(b.x - s.x, b.y - s.y) < R + b.r * 0.5) {
+      const loss = Math.min(b.troops, 8); b.troops -= loss; b.flash = 0.4;
+      if (loss) floater(b.x, b.y - b.r - 14, '-' + loss, '#ffe2a0');
+    }
+  }
+  burst(s.x, s.y, '#ffc93c', 30); burst(s.x, s.y, '#ff7a2f', 24); burst(s.x, s.y, '#5a4a3a', 14);
+  shake = 0.35;
+}
+
+// ---------- AI ----------
+function aiThink() {
+  const cfg = DIFF[difficulty];
+  const mine = bases.filter(b => b.owner === RED);
+  if (!mine.length) return;
+  const incoming = new Map();
+  for (const o of orders) if (o.team === RED && o.route.target) incoming.set(o.route.target, (incoming.get(o.route.target) || 0) + o.left);
+  for (const d of dots) if (!d.dead && d.team === RED && d.route.target) incoming.set(d.route.target, (incoming.get(d.route.target) || 0) + 1);
+  const threat = new Map();
+  for (const d of dots) if (!d.dead && d.team === BLUE && d.route.target && d.route.target.owner === RED) threat.set(d.route.target, (threat.get(d.route.target) || 0) + 1);
+
+  // Defend: send help to a base about to fall.
+  for (const [b, n] of threat) {
+    if (n >= b.troops) {
+      const helper = mine.filter(m => m !== b && m.troops > 6).sort((p, q) => dist(p, b) - dist(q, b))[0];
+      if (helper && Math.random() < 0.7) {
+        issueOrder(helper, autoRoute(helper, b), b, Math.floor(helper.troops * 0.6));
+        return;
+      }
+    }
+  }
+
+  let best = null;
+  for (const a of mine) {
+    if (a.troops < 6) continue;
+    const avail = Math.floor(a.troops * cfg.frac);
+    for (const t of bases) {
+      if (t.owner === RED) continue;
+      const pts = autoRoute(a, t);
+      const travel = routeLength(pts) / SPEED;
+      const growth = t.owner === BLUE ? Math.min(t.cap - t.troops, travel / t.rate) : 0;
+      const need = t.troops + growth + 3 + cfg.greed - (incoming.get(t) || 0);
+      if (need <= 0) continue;
+      if (avail < need) continue;
+      const score = routeLength(pts) + t.troops * 5 - (t.owner === BLUE ? 70 : 0) - (t.type === 'hq' ? 40 : 0) + Math.random() * 40;
+      if (!best || score < best.score) best = { a, t, pts, amount: Math.min(a.troops - 1, Math.ceil(need * 1.25) + 2), score };
+    }
+  }
+  if (best) { issueOrder(best.a, best.pts, best.t, best.amount); return; }
+
+  // Consolidate: a full base pushes troops toward the front line.
+  const full = mine.find(b => b.troops >= b.cap * 0.85);
+  if (full && mine.length > 1) {
+    const enemies = bases.filter(b => b.owner !== RED);
+    const front = mine.filter(m => m !== full).sort((p, q) => nearest(p, enemies) - nearest(q, enemies))[0];
+    if (front) issueOrder(full, autoRoute(full, front), front, Math.floor(full.troops * 0.5));
+  }
+}
+function nearest(p, list) { let m = Infinity; for (const q of list) m = Math.min(m, dist(p, q)); return m; }
+function aiStrike() {
+  const blues = dots.filter(d => !d.dead && d.team === BLUE);
+  if (blues.length < 8) return false;
+  let best = null, bn = 0;
+  for (let i = 0; i < Math.min(50, blues.length); i++) {
+    const c = blues[(Math.random() * blues.length) | 0];
+    let n = 0; for (const d of blues) if (Math.hypot(d.x - c.x, d.y - c.y) < 60) n++;
+    if (n > bn) { bn = n; best = c; }
+  }
+  if (bn >= 8) { launchStrike(RED, best.x, best.y); return true; }
+  return false;
+}
+
+// ---------- Update ----------
+let shake = 0;
+const grid = new Map();
+function update(dt) {
+  time -= dt;
+  const cfg = DIFF[difficulty];
+  strikeCd = Math.max(0, strikeCd - dt);
+  supplyCd = Math.max(0, supplyCd - dt);
+
+  // Production
+  for (const b of bases) {
+    b.flash = Math.max(0, b.flash - dt); b.pulse = Math.max(0, b.pulse - dt * 1.5);
+    if (b.owner === NEUTRAL || b.troops >= b.cap) { b.prog = 0; continue; }
+    b.prog += dt * (b.owner === RED ? cfg.prod : 1) / b.rate;
+    while (b.prog >= 1) { b.prog -= 1; if (b.troops < b.cap) b.troops++; }
+  }
+
+  // Orders emit dots
+  for (const o of orders) {
+    o.t -= dt;
+    while (o.t <= 0 && o.left > 0) {
+      if (o.base.owner !== o.team || o.base.troops <= 0) { o.route.pending -= o.left; o.left = 0; break; }
+      o.base.troops--; o.left--; o.route.pending--;
+      spawnDot(o.team, o.base, o.route);
+      o.t += EMIT;
+    }
+  }
+  orders = orders.filter(o => o.left > 0);
+
+  // Movement
+  for (const d of dots) {
+    if (d.dead || d.idle) continue;
+    const pts = d.route.pts, last = pts.length - 1, tgt = d.route.target;
+    let step = SPEED * (inWater(d.x, d.y) ? 0.38 : 1) * dt;
+    while (step > 0 && d.pi <= last) {
+      const p = pts[d.pi];
+      const isLast = d.pi === last;
+      const tx = p.x + (isLast ? (tgt ? 0 : d.ex) : d.ox), ty = p.y + (isLast ? (tgt ? 0 : d.ey) : d.oy);
+      const dx = tx - d.x, dy = ty - d.y, L = Math.hypot(dx, dy);
+      if (tgt && isLast && L < tgt.r * 0.55) { d.pi = last + 1; break; }
+      if (L <= step) { d.x = tx; d.y = ty; step -= L; d.pi++; }
+      else { d.x += dx / L * step; d.y += dy / L * step; step = 0; }
+    }
+    if (d.pi > last) {
+      if (tgt) arrive(d, tgt);
+      else { d.idle = true; }
+    }
+  }
+
+  // Combat (spatial hash)
+  grid.clear();
+  const CS = 18;
+  for (const d of dots) if (!d.dead && d.team === RED) {
+    const k = ((d.x / CS) | 0) * 1000 + ((d.y / CS) | 0);
+    let c = grid.get(k); if (!c) grid.set(k, c = []); c.push(d);
+  }
+  for (const d of dots) {
+    if (d.dead || d.team !== BLUE) continue;
+    const cx = (d.x / CS) | 0, cy = (d.y / CS) | 0;
+    let foe = null;
+    for (let i = -1; i <= 1 && !foe; i++) for (let j = -1; j <= 1 && !foe; j++) {
+      const c = grid.get((cx + i) * 1000 + cy + j); if (!c) continue;
+      for (const e of c) if (!e.dead && Math.abs(e.x - d.x) < HIT_R && Math.abs(e.y - d.y) < HIT_R && Math.hypot(e.x - d.x, e.y - d.y) < HIT_R) { foe = e; break; }
+    }
+    if (foe) {
+      d.dead = foe.dead = true; releaseDot(d); releaseDot(foe);
+      stats.killed++; stats.lost++;
+      burst((d.x + foe.x) / 2, (d.y + foe.y) / 2, '#fff2c4', 5);
+    }
+  }
+  if (dots.some(d => d.dead)) dots = dots.filter(d => !d.dead);
+  routes = routes.filter(r => r.n > 0 || r.pending > 0);
+
+  // Strikes
+  for (const s of strikes) { s.t -= dt; if (s.t <= 0) detonate(s); }
+  strikes = strikes.filter(s => s.t > 0);
+
+  // Effects
+  for (const p of particles) { p.life -= dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.9; p.vy *= 0.9; }
+  particles = particles.filter(p => p.life > 0);
+  for (const f of floaters) { f.life -= dt; f.y -= 22 * dt; }
+  floaters = floaters.filter(f => f.life > 0);
+  shake = Math.max(0, shake - dt);
+
+  // AI
+  aiTimer -= dt;
+  if (aiTimer <= 0) { aiThink(); aiTimer = cfg.think * (0.75 + Math.random() * 0.5); }
+  aiStrikeCd -= dt;
+  if (aiStrikeCd <= 0) { aiStrikeCd = aiStrike() ? cfg.strike : 4; }
+
+  checkEnd();
+}
+
+function strength(team) {
+  let s = 0;
+  for (const b of bases) if (b.owner === team) s += b.troops;
+  for (const d of dots) if (d.team === team) s++;
+  return s;
+}
+function alive(team) { return bases.some(b => b.owner === team) || dots.some(d => d.team === team); }
+function checkEnd() {
+  if (over) return;
+  const blueAlive = alive(BLUE), redAlive = alive(RED);
+  if (!redAlive) return finish('win', 'The enemy army is wiped out.');
+  if (!blueAlive) return finish('lose', 'Your last base has fallen.');
+  if (time <= 0) {
+    time = 0;
+    const b = strength(BLUE), r = strength(RED);
+    if (b > r) finish('win', `Time! You hold ${b} troops to their ${r}.`);
+    else if (r > b) finish('lose', `Time! They hold ${r} troops to your ${b}.`);
+    else finish('draw', `Time! Both armies stand at ${b}.`);
+  }
+}
+function finish(kind, msg) {
+  over = true; paused = true; armed = null; syncTools();
+  const t = document.getElementById('resultTitle');
+  t.textContent = kind === 'win' ? 'Victory' : kind === 'lose' ? 'Defeat' : 'Stalemate';
+  t.style.color = kind === 'win' ? '#7fb0ff' : kind === 'lose' ? '#ff7a72' : '#ffc93c';
+  document.getElementById('resultSub').textContent = msg;
+  document.getElementById('sKilled').textContent = stats.killed;
+  document.getElementById('sCaptured').textContent = stats.captured;
+  document.getElementById('sTime').textContent = fmt(MATCH_TIME - time);
+  if (kind === 'win') record[difficulty].w++; else if (kind === 'lose') record[difficulty].l++;
+  saveRecord();
+  setTimeout(() => { endEl.hidden = false; }, 700);
+}
+
+// ---------- Rendering ----------
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+let dpr = 1, scale = 1, offX = 0, offY = 0, bg = null;
+const dotSprites = {};
+
+function resize() {
+  const r = cv.getBoundingClientRect();
+  dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+  cv.width = Math.max(1, Math.round(r.width * dpr));
+  cv.height = Math.max(1, Math.round(r.height * dpr));
+  scale = Math.min(r.width / W, r.height / H);
+  offX = (r.width - W * scale) / 2; offY = (r.height - H * scale) / 2;
+  buildBackground();
+  buildSprites();
+}
+
+function buildSprites() {
+  for (const team of [BLUE, RED]) {
+    const px = Math.ceil(14 * scale * dpr) + 4;
+    const c = document.createElement('canvas'); c.width = c.height = px;
+    const g = c.getContext('2d'); const R = px / 2 - 2;
+    g.fillStyle = 'rgba(0,0,0,.28)'; g.beginPath(); g.ellipse(px / 2 + R * 0.12, px / 2 + R * 0.28, R * 0.95, R * 0.8, 0, 0, 7); g.fill();
+    const gr = g.createRadialGradient(px / 2 - R * 0.35, px / 2 - R * 0.4, R * 0.1, px / 2, px / 2, R);
+    gr.addColorStop(0, PAL[team].light); gr.addColorStop(0.45, PAL[team].main); gr.addColorStop(1, PAL[team].dark);
+    g.fillStyle = gr; g.beginPath(); g.arc(px / 2, px / 2, R * 0.86, 0, 7); g.fill();
+    g.strokeStyle = 'rgba(255,255,255,.85)'; g.lineWidth = Math.max(1, R * 0.16); g.stroke();
+    dotSprites[team] = c;
+  }
+}
+
+function buildBackground() {
+  bg = document.createElement('canvas'); bg.width = cv.width; bg.height = cv.height;
+  const g = bg.getContext('2d');
+  g.fillStyle = '#6aa848'; g.fillRect(0, 0, bg.width, bg.height);
+  g.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * offX, dpr * offY);
+  const rnd = mulberry(7);
+  // ground
+  g.fillStyle = '#7fbf55'; g.fillRect(0, 0, W, H);
+  for (let i = 0; i < 70; i++) {
+    const x = rnd() * W, y = rnd() * H, r = 25 + rnd() * 70;
+    g.fillStyle = rnd() < 0.5 ? 'rgba(160,214,110,.35)' : 'rgba(92,160,64,.30)';
+    blob(g, x, y, r, rnd);
+  }
+  // sandy clearings under bases
+  for (const L of LAYOUT) for (const [x, y] of [[L.x, L.y], [W - L.x, H - L.y]]) {
+    g.fillStyle = 'rgba(232,212,150,.55)'; blob(g, x, y, TYPES[L.type].r + 20, rnd);
+  }
+  // river
+  const riverPath = () => { g.beginPath(); for (let x = -20; x <= W + 20; x += 6) { const y = riverY(x); x === -20 ? g.moveTo(x, y) : g.lineTo(x, y); } };
+  g.lineCap = 'round'; g.lineJoin = 'round';
+  riverPath(); g.strokeStyle = '#d8c387'; g.lineWidth = RIVER_HALF * 2 + 14; g.stroke();
+  riverPath(); g.strokeStyle = '#3d93d6'; g.lineWidth = RIVER_HALF * 2; g.stroke();
+  riverPath(); g.strokeStyle = '#5fb0ea'; g.lineWidth = RIVER_HALF * 1.2; g.stroke();
+  g.setLineDash([14, 22]); riverPath(); g.strokeStyle = 'rgba(255,255,255,.45)'; g.lineWidth = 2; g.stroke(); g.setLineDash([]);
+  // bridges
+  for (const bx of BRIDGES) {
+    const ry = riverY(bx), h = RIVER_HALF * 2 + 26, w = 46;
+    g.save(); g.translate(bx, ry);
+    g.fillStyle = 'rgba(0,0,0,.25)'; g.fillRect(-w / 2 + 3, -h / 2 + 4, w, h);
+    g.fillStyle = '#b07a42'; g.fillRect(-w / 2, -h / 2, w, h);
+    g.strokeStyle = '#7a4f24'; g.lineWidth = 2;
+    for (let y = -h / 2 + 7; y < h / 2; y += 8) { g.beginPath(); g.moveTo(-w / 2, y); g.lineTo(w / 2, y); g.stroke(); }
+    g.fillStyle = '#6e4520'; g.fillRect(-w / 2 - 3, -h / 2, 5, h); g.fillRect(w / 2 - 2, -h / 2, 5, h);
+    g.restore();
+  }
+  // trees and rocks, kept clear of bases, bridges and river
+  const clear = (x, y, pad) => {
+    if (Math.abs(y - riverY(x)) < RIVER_HALF + 18 + pad) return false;
+    for (const L of LAYOUT) for (const [bx, by] of [[L.x, L.y], [W - L.x, H - L.y]]) if (Math.hypot(x - bx, y - by) < TYPES[L.type].r + 26 + pad) return false;
+    return true;
+  };
+  const clumps = [];
+  for (let i = 0; i < 400 && clumps.length < 13; i++) {
+    const x = 20 + rnd() * (W - 40), y = 20 + rnd() * (H / 2 - 40);
+    if (clear(x, y, 22) && clumps.every(c => Math.hypot(c.x - x, c.y - y) > 80)) { clumps.push({ x, y }); clumps.push({ x: W - x, y: H - y }); }
+  }
+  for (const c of clumps) {
+    const n = 3 + Math.floor(rnd() * 5);
+    const trees = [];
+    for (let k = 0; k < n; k++) trees.push({ x: c.x + (rnd() - 0.5) * 44, y: c.y + (rnd() - 0.5) * 36, r: 8 + rnd() * 6 });
+    trees.sort((a, b) => a.y - b.y);
+    for (const t of trees) { g.fillStyle = 'rgba(30,60,20,.28)'; g.beginPath(); g.ellipse(t.x + 3, t.y + t.r * 0.7, t.r, t.r * 0.5, 0, 0, 7); g.fill(); }
+    for (const t of trees) {
+      g.fillStyle = '#2f7a35'; g.beginPath(); g.arc(t.x, t.y, t.r, 0, 7); g.fill();
+      g.fillStyle = '#46a046'; g.beginPath(); g.arc(t.x - t.r * 0.25, t.y - t.r * 0.3, t.r * 0.62, 0, 7); g.fill();
+      g.fillStyle = 'rgba(190,240,140,.35)'; g.beginPath(); g.arc(t.x - t.r * 0.4, t.y - t.r * 0.45, t.r * 0.25, 0, 7); g.fill();
+    }
+  }
+  for (let i = 0, placed = 0; i < 300 && placed < 9; i++) {
+    const x = rnd() * W, y = rnd() * H / 2;
+    if (!clear(x, y, 6)) continue;
+    placed++;
+    for (const [rx, ry] of [[x, y], [W - x, H - y]]) {
+      const r = 4 + rnd() * 5;
+      g.fillStyle = 'rgba(0,0,0,.2)'; g.beginPath(); g.ellipse(rx + 2, ry + 2, r, r * 0.7, 0, 0, 7); g.fill();
+      g.fillStyle = '#a9a39a'; g.beginPath(); g.ellipse(rx, ry, r, r * 0.72, 0, 0, 7); g.fill();
+      g.fillStyle = '#cfc9bf'; g.beginPath(); g.ellipse(rx - r * 0.25, ry - r * 0.25, r * 0.45, r * 0.3, 0, 0, 7); g.fill();
+    }
+  }
+  // grass tufts
+  g.strokeStyle = 'rgba(60,120,40,.45)'; g.lineWidth = 1.4;
+  for (let i = 0; i < 160; i++) {
+    const x = rnd() * W, y = rnd() * H; if (!clear(x, y, 0)) continue;
+    g.beginPath(); g.moveTo(x - 3, y); g.lineTo(x - 1, y - 5); g.moveTo(x, y); g.lineTo(x + 1, y - 6); g.moveTo(x + 3, y); g.lineTo(x + 4, y - 4); g.stroke();
+  }
+}
+function blob(g, x, y, r, rnd) {
+  g.beginPath();
+  const n = 10;
+  for (let i = 0; i <= n; i++) {
+    const a = i / n * Math.PI * 2, rr = r * (0.8 + rnd() * 0.3);
+    const px = x + Math.cos(a) * rr, py = y + Math.sin(a) * rr * 0.8;
+    i ? g.lineTo(px, py) : g.moveTo(px, py);
+  }
+  g.closePath(); g.fill();
+}
+
+function draw(now) {
+  const sx = shake > 0 ? (Math.random() - 0.5) * 8 * shake : 0, sy = shake > 0 ? (Math.random() - 0.5) * 8 * shake : 0;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(bg, sx * dpr, sy * dpr);
+  ctx.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * (offX + sx), dpr * (offY + sy));
+  const T = now / 1000;
+
+  // routes
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  for (const r of routes) {
+    ctx.setLineDash([5, 7]); ctx.lineDashOffset = -T * 24;
+    ctx.strokeStyle = r.team === BLUE ? 'rgba(18,40,110,.75)' : 'rgba(110,20,16,.6)';
+    ctx.lineWidth = 2.4;
+    ctx.beginPath(); r.pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.stroke();
+    ctx.setLineDash([]);
+    if (!r.target) {
+      const e = r.pts[r.pts.length - 1];
+      ctx.strokeStyle = r.team === BLUE ? 'rgba(18,40,110,.6)' : 'rgba(110,20,16,.5)';
+      ctx.beginPath(); ctx.arc(e.x, e.y, r.spread + 4, 0, 7); ctx.stroke();
+    }
+  }
+
+  // selected dots highlight
+  if (drag && drag.kind === 'dots') {
+    ctx.fillStyle = 'rgba(255,255,255,.55)';
+    for (const d of drag.dots) if (!d.dead) { ctx.beginPath(); ctx.arc(d.x, d.y, 8, 0, 7); ctx.fill(); }
+  }
+
+  // dots
+  const ds = 12;
+  for (const d of dots) {
+    const bob = d.idle ? Math.sin(T * 3 + d.wob) * 0.6 : 0;
+    ctx.drawImage(dotSprites[d.team], d.x - ds / 2, d.y - ds / 2 + bob, ds, ds);
+  }
+
+  // bases
+  for (const b of bases) drawBase(b, T);
+
+  // strikes
+  for (const s of strikes) {
+    const k = 1 - s.t / 0.9;
+    ctx.strokeStyle = s.team === BLUE ? 'rgba(255,201,60,.95)' : 'rgba(255,90,80,.95)';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.arc(s.x, s.y, 62, 0, 7); ctx.stroke();
+    ctx.fillStyle = s.team === BLUE ? 'rgba(255,201,60,.18)' : 'rgba(255,90,80,.18)';
+    ctx.beginPath(); ctx.arc(s.x, s.y, 62 * k, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(s.x - 12, s.y); ctx.lineTo(s.x + 12, s.y); ctx.moveTo(s.x, s.y - 12); ctx.lineTo(s.x, s.y + 12); ctx.stroke();
+    // falling bomb
+    const by = s.y - 160 * (1 - k);
+    ctx.fillStyle = '#20263a'; ctx.beginPath(); ctx.ellipse(s.x, by, 5, 9, 0, 0, 7); ctx.fill();
+  }
+
+  // particles
+  for (const p of particles) {
+    ctx.globalAlpha = clamp(p.life / 0.5, 0, 1);
+    ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // drawing preview
+  if (drag && drag.pts.length > 1) {
+    const pts = drag.pts;
+    const end = pts[pts.length - 1];
+    const tgt = targetAt(end, drag.kind === 'base' ? drag.base : null);
+    ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.lineWidth = 6;
+    ctx.beginPath(); pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); if (tgt) ctx.lineTo(tgt.x, tgt.y); ctx.stroke();
+    ctx.strokeStyle = PAL[BLUE].main; ctx.lineWidth = 3; ctx.setLineDash([8, 6]); ctx.lineDashOffset = -T * 30; ctx.stroke(); ctx.setLineDash([]);
+    if (tgt) {
+      ctx.strokeStyle = tgt.owner === BLUE ? '#ffffff' : '#ffc93c'; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(tgt.x, tgt.y, tgt.r + 8 + Math.sin(T * 8) * 2, 0, 7); ctx.stroke();
+    } else {
+      ctx.fillStyle = PAL[BLUE].main; ctx.beginPath(); ctx.arc(end.x, end.y, 6, 0, 7); ctx.fill();
+    }
+    const n = drag.kind === 'base' ? Math.min(drag.base.troops, Math.max(1, Math.floor(drag.base.troops * sendFrac))) : drag.dots.filter(d => !d.dead).length;
+    pill(end.x, end.y - 24, '×' + n, PAL[BLUE].dark, 15);
+  }
+
+  // armed ability cursor hint
+  for (const f of floaters) {
+    ctx.globalAlpha = clamp(f.life, 0, 1);
+    ctx.font = '18px "Lilita One", "Trebuchet MS", sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(15,20,40,.85)'; ctx.strokeText(f.text, f.x, f.y);
+    ctx.fillStyle = f.color; ctx.fillText(f.text, f.x, f.y);
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawBase(b, T) {
+  const c = PAL[b.owner];
+  const s = 1 + b.flash * 0.25 + b.pulse * 0.15;
+  ctx.save(); ctx.translate(b.x, b.y); ctx.scale(s, s);
+  // shadow
+  ctx.fillStyle = 'rgba(0,0,0,.25)'; ctx.beginPath(); ctx.ellipse(3, b.r * 0.45, b.r * 1.02, b.r * 0.62, 0, 0, 7); ctx.fill();
+  // selection
+  if (b === selectedBase) {
+    ctx.save(); ctx.rotate(T * 1.5);
+    ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 3; ctx.setLineDash([7, 6]);
+    ctx.beginPath(); ctx.arc(0, 0, b.r + 9, 0, 7); ctx.stroke(); ctx.restore();
+  }
+  if (b.pulse > 0) { ctx.strokeStyle = c.light; ctx.globalAlpha = b.pulse; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(0, 0, b.r + 22 * (1 - b.pulse), 0, 7); ctx.stroke(); ctx.globalAlpha = 1; }
+  // body
+  const gr = ctx.createRadialGradient(-b.r * 0.35, -b.r * 0.45, b.r * 0.1, 0, 0, b.r);
+  gr.addColorStop(0, c.light); gr.addColorStop(0.5, c.main); gr.addColorStop(1, c.dark);
+  ctx.fillStyle = gr; ctx.beginPath(); ctx.arc(0, 0, b.r, 0, 7); ctx.fill();
+  ctx.strokeStyle = b.flash > 0 ? '#ffe08a' : 'rgba(255,255,255,.9)'; ctx.lineWidth = 3; ctx.stroke();
+  // production ring
+  if (b.owner !== NEUTRAL && b.troops < b.cap) {
+    ctx.strokeStyle = 'rgba(255,255,255,.75)'; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.arc(0, 0, b.r + 4, -Math.PI / 2, -Math.PI / 2 + b.prog * Math.PI * 2); ctx.stroke();
+  }
+  // icon
+  ctx.fillStyle = 'rgba(255,255,255,.95)'; ctx.strokeStyle = c.dark; ctx.lineWidth = 1.5;
+  const k = b.r / 30;
+  if (b.type === 'hq') {
+    ctx.beginPath();
+    ctx.moveTo(-13 * k, 10 * k); ctx.lineTo(-13 * k, -8 * k); ctx.lineTo(-9 * k, -8 * k); ctx.lineTo(-9 * k, -4 * k); ctx.lineTo(-4 * k, -4 * k);
+    ctx.lineTo(-4 * k, -12 * k); ctx.lineTo(4 * k, -12 * k); ctx.lineTo(4 * k, -4 * k); ctx.lineTo(9 * k, -4 * k); ctx.lineTo(9 * k, -8 * k);
+    ctx.lineTo(13 * k, -8 * k); ctx.lineTo(13 * k, 10 * k); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = c.dark; ctx.beginPath(); ctx.arc(0, 10 * k, 4 * k, Math.PI, 0); ctx.lineTo(4 * k, 10 * k); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,.95)'; ctx.beginPath(); ctx.moveTo(0, -12 * k); ctx.lineTo(0, -20 * k); ctx.stroke();
+    ctx.fillStyle = b.owner === NEUTRAL ? '#fff' : c.light; ctx.beginPath(); ctx.moveTo(0, -20 * k); ctx.lineTo(8 * k, -17.5 * k); ctx.lineTo(0, -15 * k); ctx.fill();
+  } else if (b.type === 'town') {
+    const q = b.r / 22;
+    ctx.beginPath(); ctx.moveTo(-10 * q, 8 * q); ctx.lineTo(-10 * q, -2 * q); ctx.lineTo(0, -11 * q); ctx.lineTo(10 * q, -2 * q); ctx.lineTo(10 * q, 8 * q); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = c.dark; ctx.fillRect(-3 * q, 1 * q, 6 * q, 7 * q);
+  } else {
+    const q = b.r / 17;
+    ctx.strokeStyle = 'rgba(255,255,255,.95)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(-5 * q, 9 * q); ctx.lineTo(-5 * q, -9 * q); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-5 * q, -9 * q); ctx.lineTo(8 * q, -5 * q); ctx.lineTo(-5 * q, -1 * q); ctx.closePath(); ctx.fill();
+  }
+  ctx.restore();
+  pill(b.x, b.y + b.r + 9, String(b.troops), b.owner === NEUTRAL ? '#4b525d' : c.dark, b.type === 'hq' ? 17 : 15);
+}
+
+function pill(x, y, text, color, size) {
+  ctx.font = `${size}px "Lilita One", "Trebuchet MS", sans-serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const w = Math.max(ctx.measureText(text).width + 12, size * 1.6), h = size + 6;
+  ctx.fillStyle = color; ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.lineWidth = 2;
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(x - w / 2, y - h / 2, w, h, h / 2); else ctx.rect(x - w / 2, y - h / 2, w, h);
+  ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#ffffff'; ctx.fillText(text, x, y + 1);
+}
+
+// ---------- Input ----------
+function toWorld(e) {
+  const r = cv.getBoundingClientRect();
+  return { x: (e.clientX - r.left - offX) / scale, y: (e.clientY - r.top - offY) / scale };
+}
+function baseAt(p, pad) {
+  let best = null, bd = Infinity;
+  for (const b of bases) { const d = dist(p, b); if (d < b.r + pad && d < bd) { bd = d; best = b; } }
+  return best;
+}
+function targetAt(p, exclude) { const b = baseAt(p, 20); return b && b !== exclude ? b : null; }
+
+cv.addEventListener('pointerdown', e => {
+  if (paused || over) return;
+  cv.setPointerCapture(e.pointerId);
+  const p = toWorld(e);
+  if (armed === 'strike') {
+    launchStrike(BLUE, p.x, p.y); strikeCd = STRIKE_CD; armed = null; syncTools(); return;
+  }
+  if (armed === 'supply') {
+    const b = baseAt(p, 16);
+    if (b && b.owner === BLUE) {
+      b.troops += 12; b.pulse = 1; supplyCd = SUPPLY_CD; armed = null;
+      floater(b.x, b.y - b.r - 16, '+12', '#ffffff'); burst(b.x, b.y, '#ffe08a', 14);
+      syncTools();
+    } else { flashHint('Tap one of your blue bases for the supply drop'); }
+    return;
+  }
+  const b = baseAt(p, 10);
+  if (b && b.owner === BLUE) { drag = { kind: 'base', base: b, pts: [{ x: b.x, y: b.y }], len: 0 }; return; }
+  const group = dots.filter(d => d.team === BLUE && Math.hypot(d.x - p.x, d.y - p.y) < 46);
+  if (group.length) { drag = { kind: 'dots', dots: group, pts: [p], len: 0 }; return; }
+  if (b && selectedBase) { sendAuto(selectedBase, b); selectedBase = null; return; }
+  selectedBase = null;
+});
+cv.addEventListener('pointermove', e => {
+  if (!drag) return;
+  const p = toWorld(e);
+  p.x = clamp(p.x, 4, W - 4); p.y = clamp(p.y, 4, H - 4);
+  const last = drag.pts[drag.pts.length - 1];
+  const d = dist(p, last);
+  if (d >= 9 && drag.pts.length < 500) { drag.pts.push(p); drag.len += d; }
+});
+const endDrag = e => {
+  if (!drag) return;
+  const dr = drag; drag = null;
+  if (paused || over) return;
+  if (dr.len < 24) {
+    if (dr.kind === 'base') {
+      if (selectedBase && selectedBase !== dr.base) { sendAuto(selectedBase, dr.base); selectedBase = null; }
+      else selectedBase = selectedBase === dr.base ? null : dr.base;
+      if (selectedBase) flashHint('Now tap a base to send troops there');
+    }
+    return;
+  }
+  selectedBase = null;
+  const pts = dr.pts.slice();
+  const tgt = targetAt(pts[pts.length - 1], dr.kind === 'base' ? dr.base : null);
+  if (tgt) pts.push({ x: tgt.x, y: tgt.y });
+  if (dr.kind === 'base') {
+    const amount = Math.max(1, Math.floor(dr.base.troops * sendFrac));
+    issueOrder(dr.base, pts, tgt, amount);
+  } else {
+    const group = dr.dots.filter(d => !d.dead);
+    if (!group.length) return;
+    const route = makeRoute(BLUE, pts, tgt, group.length);
+    for (const d of group) assignRoute(d, route);
+  }
+  hintEl.hidden = true;
+};
+cv.addEventListener('pointerup', endDrag);
+cv.addEventListener('pointercancel', () => { drag = null; });
+
+function sendAuto(from, to) {
+  if (from.owner !== BLUE || from === to) return;
+  issueOrder(from, autoRoute(from, to), to, Math.max(1, Math.floor(from.troops * sendFrac)));
+  hintEl.hidden = true;
+}
+
+// ---------- HUD ----------
+const hintEl = document.getElementById('hint');
+const menuEl = document.getElementById('menu');
+const endEl = document.getElementById('end');
+const barBlue = document.getElementById('barBlue'), barRed = document.getElementById('barRed');
+const timerEl = document.getElementById('timer');
+const tSend = document.getElementById('tSend'), tStrike = document.getElementById('tStrike'), tSupply = document.getElementById('tSupply');
+let hintTimer = 0;
+function flashHint(t) { hintEl.textContent = t; hintEl.hidden = false; clearTimeout(hintTimer); hintTimer = setTimeout(() => { hintEl.hidden = true; }, 2200); }
+const fmt = s => { s = Math.max(0, Math.ceil(s)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+
+function syncTools() {
+  tStrike.classList.toggle('armed', armed === 'strike');
+  tSupply.classList.toggle('armed', armed === 'supply');
+  for (const [el, cd, max] of [[tStrike, strikeCd, STRIKE_CD], [tSupply, supplyCd, SUPPLY_CD]]) {
+    el.querySelector('.cd').style.setProperty('--p', cd > 0 ? (cd / max).toFixed(3) : 0);
+    el.querySelector('.cdnum').textContent = cd > 0 ? Math.ceil(cd) : '';
+    el.classList.toggle('cooling', cd > 0);
+  }
+}
+let hudAcc = 0;
+function updateHud(dt) {
+  hudAcc += dt; if (hudAcc < 0.1) return; hudAcc = 0;
+  const b = strength(BLUE), r = strength(RED), tot = Math.max(1, b + r);
+  barBlue.style.width = clamp(b / tot * 100, 8, 92) + '%';
+  barBlue.textContent = b; barRed.textContent = r;
+  timerEl.textContent = fmt(time); timerEl.classList.toggle('low', time <= 30);
+  syncTools();
+}
+
+tSend.addEventListener('click', () => {
+  sendFrac = sendFrac === 0.25 ? 0.5 : sendFrac === 0.5 ? 1 : 0.25;
+  document.getElementById('sendPct').textContent = Math.round(sendFrac * 100) + '%';
+});
+tStrike.addEventListener('click', () => {
+  if (paused || over || strikeCd > 0) return;
+  armed = armed === 'strike' ? null : 'strike'; syncTools();
+  if (armed) flashHint('Tap the map to call in the airstrike');
+});
+tSupply.addEventListener('click', () => {
+  if (paused || over || supplyCd > 0) return;
+  armed = armed === 'supply' ? null : 'supply'; syncTools();
+  if (armed) flashHint('Tap one of your bases to drop supplies');
+});
+
+// difficulty + record
+let record = { easy: { w: 0, l: 0 }, normal: { w: 0, l: 0 }, hard: { w: 0, l: 0 } };
+try { const s = JSON.parse(localStorage.getItem('dotsRtsWar.record')); if (s && s.easy) record = s; } catch (_) {}
+try { const d = localStorage.getItem('dotsRtsWar.diff'); if (DIFF[d]) difficulty = d; } catch (_) {}
+function saveRecord() { try { localStorage.setItem('dotsRtsWar.record', JSON.stringify(record)); } catch (_) {} }
+const NAMES = { easy: 'Recruit', normal: 'Captain', hard: 'General' };
+function syncMenu() {
+  for (const btn of document.querySelectorAll('#diff button')) btn.setAttribute('aria-pressed', String(btn.dataset.d === difficulty));
+  const r = record[difficulty];
+  document.getElementById('record').textContent = `vs ${NAMES[difficulty]}: ${r.w} won · ${r.l} lost`;
+  document.getElementById('playBtn').textContent = running && !over ? 'Resume' : 'Deploy';
+}
+document.getElementById('diff').addEventListener('click', e => {
+  const d = e.target.closest('button'); if (!d) return;
+  if (d.dataset.d !== difficulty && running && !over) running = false; // changing commander starts a fresh battle
+  difficulty = d.dataset.d;
+  try { localStorage.setItem('dotsRtsWar.diff', difficulty); } catch (_) {}
+  syncMenu();
+});
+document.getElementById('playBtn').addEventListener('click', () => {
+  if (!running || over) { newGame(); running = true; }
+  menuEl.hidden = true; paused = false;
+});
+document.getElementById('pauseBtn').addEventListener('click', () => {
+  paused = true; armed = null; drag = null; syncTools(); syncMenu(); menuEl.hidden = false; endEl.hidden = true;
+});
+document.getElementById('againBtn').addEventListener('click', () => { endEl.hidden = true; newGame(); running = true; paused = false; });
+document.getElementById('menuBtn').addEventListener('click', () => { endEl.hidden = true; running = false; syncMenu(); menuEl.hidden = false; });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && running && !over && !paused) { paused = true; syncMenu(); menuEl.hidden = false; }
+});
+
+// ---------- Loop ----------
+let lastT = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - lastT) / 1000); lastT = now;
+  if (!paused && !over) update(dt);
+  else if (over) { // let effects settle after the battle ends
+    for (const p of particles) { p.life -= dt; p.x += p.vx * dt; p.y += p.vy * dt; }
+    particles = particles.filter(p => p.life > 0);
+    for (const f of floaters) { f.life -= dt; f.y -= 22 * dt; }
+    floaters = floaters.filter(f => f.life > 0);
+  }
+  updateHud(dt);
+  draw(now);
+  requestAnimationFrame(frame);
+}
+
+new ResizeObserver(resize).observe(cv);
+newGame(); // shows a live battlefield behind the menu
+resize();
+syncMenu();
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

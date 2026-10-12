@@ -165,10 +165,10 @@ body {
           </div>
         </div>
         <ul class="howto">
-          <li><span>1</span><span>Your bases keep adding <b>blue dots</b> to the map around them.</span></li>
+          <li><span>1</span><span>A light runs around each base. When it closes the ring, a new <b>blue dot</b> steps out.</span></li>
           <li><span>2</span><span><b>Drag from a group of dots</b> and draw a path. They march along your line.</span></li>
           <li><span>3</span><span>End on a base to <b>capture</b> it, or anywhere to hold ground. Or tap a group, then tap where to go.</span></li>
-          <li><span>4</span><span>Dots that meet trade one for one. Rivers slow troops, so use the <b>bridges</b>.</span></li>
+          <li><span>4</span><span>Dots <b>shoot</b> enemies in range. Dots that stand still <b>dig in</b> and take half damage. Use the bridges.</span></li>
         </ul>
         <button class="btn" id="playBtn">Deploy</button>
         <p class="record" id="record"></p>
@@ -197,9 +197,9 @@ body {
       <svg viewBox="0 0 26 26" aria-hidden="true"><path fill="#ffc93c" d="M13 1l2.2 8.3H24l-7 5.2 2.7 8.5L13 17.8 6.3 23l2.7-8.5-7-5.2h8.8z"/><circle cx="13" cy="13" r="3.4" fill="#e5423a"/></svg>
       <span>AIRSTRIKE</span><div class="cd"></div><div class="cdnum"></div>
     </button>
-    <button class="tool" id="tSupply" aria-label="Supply drop: tap one of your bases to add 12 dots">
+    <button class="tool" id="tSupply" aria-label="Supply drop: tap one of your bases to add 5 dots">
       <svg viewBox="0 0 26 26" aria-hidden="true"><path fill="#c98a4b" d="M4 9h18v14H4z"/><path fill="#8a5a2b" d="M4 9h18v3H4zM11.5 9h3v14h-3z"/><path fill="#f4f7ff" d="M7 2h12l3 7H4z"/></svg>
-      <span>SUPPLY +12</span><div class="cd"></div><div class="cdnum"></div>
+      <span>SUPPLY +5</span><div class="cd"></div><div class="cdnum"></div>
     </button>
   </div>
 </div>
@@ -216,23 +216,26 @@ const PAL = {
   2: { main: '#e5423a', dark: '#8c1a16', light: '#ffa49d' },
 };
 const SPEED = 40;            // world units per second
-const HIT_R = 9;             // dots closer than this fight
+const RANGE = 95;            // how far a dot can shoot
+const FIRE_EVERY = 1.0;      // seconds between shots
+const DOT_HP = 3;
+const DIG_IN = 1.5;          // seconds standing still before a dot gets its shield
 const MATCH_TIME = 180;
 const RIVER_HALF = 24;
 const BRIDGES = [130, 470];
-const TEAM_CAP = 220;        // most dots one army can field
+const TEAM_CAP = 50;         // most dots one army can field
 // hp: shield an owned base regains; crowd: dots a base keeps around itself before it stops producing
 const TYPES = {
-  hq:      { r: 30, hp: 15, crowd: 60, rate: 0.85 },
-  town:    { r: 22, hp: 10, crowd: 36, rate: 1.45 },
-  outpost: { r: 17, hp: 6,  crowd: 22, rate: 2.2 },
+  hq:      { r: 36, hp: 10, crowd: 14, rate: 2.0 },
+  town:    { r: 30, hp: 6,  crowd: 10, rate: 3.0 },
+  outpost: { r: 24, hp: 4,  crowd: 8,  rate: 4.0 },
 };
 const DIFF = {
-  easy:   { think: 3.4, prod: 0.8,  frac: 0.6, strike: 0,  greed: 4 },
-  normal: { think: 2.1, prod: 1.0,  frac: 0.75, strike: 38, greed: 2 },
+  easy:   { think: 3.4, prod: 0.8,  frac: 0.6,  strike: 0,  greed: 2 },
+  normal: { think: 2.1, prod: 1.0,  frac: 0.75, strike: 38, greed: 1 },
   hard:   { think: 1.25, prod: 1.2, frac: 0.85, strike: 26, greed: 0 },
 };
-const GRAB_R = 50;           // how far from your finger dots get picked up
+const GRAB_R = 60;           // how far from your finger dots get picked up
 
 const riverY = x => 500 + 70 * Math.sin((x - 300) / 600 * Math.PI * 2);
 const onBridge = x => BRIDGES.some(b => Math.abs(x - b) < 26);
@@ -249,27 +252,24 @@ function mulberry(seed) {
 // Bottom half of the map; the top half is the same map rotated 180°.
 // For owned bases `start` is the dots they begin with; for neutral ones it is their shield.
 const LAYOUT = [
-  { x: 300, y: 910, type: 'hq',      own: true,  start: 20 },
-  { x: 130, y: 800, type: 'town',    own: true,  start: 8 },
-  { x: 470, y: 815, type: 'town',    own: false, start: 12 },
-  { x: 300, y: 730, type: 'outpost', own: false, start: 8 },
-  { x: 72,  y: 650, type: 'outpost', own: false, start: 10 },
-  { x: 528, y: 668, type: 'outpost', own: false, start: 10 },
-  { x: 195, y: 600, type: 'outpost', own: false, start: 14 },
+  { x: 400, y: 880, type: 'hq',      own: true,  start: 6 },
+  { x: 150, y: 760, type: 'town',    own: true,  start: 3 },
+  { x: 470, y: 650, type: 'outpost', own: false, start: 5 },
 ];
 
 // ---------- State ----------
-let bases, dots, routes, particles, floaters, strikes;
+let bases, dots, routes, particles, floaters, strikes, bullets;
 let time, running = false, paused = true, over = false;
 let difficulty = 'normal';
 let aiTimer, aiStrikeCd;
 let strikeCd = 0, supplyCd = 0, armed = null; // 'strike' | 'supply'
 let selected = null, drag = null;             // selected: { dots, base }
 let stats, crowdTimer = 0;
+const teamCount = { 1: 0, 2: 0 };
 const STRIKE_CD = 25, SUPPLY_CD = 20;
 
 function newGame() {
-  bases = []; dots = []; routes = []; particles = []; floaters = []; strikes = [];
+  bases = []; dots = []; routes = []; particles = []; floaters = []; strikes = []; bullets = [];
   for (const L of LAYOUT) {
     for (const [x, y, team] of [[L.x, L.y, BLUE], [W - L.x, H - L.y, RED]]) {
       const b = mkBase(x, y, L.type, L.own ? team : NEUTRAL);
@@ -288,32 +288,36 @@ function newGame() {
 function mkBase(x, y, type, owner) {
   const t = TYPES[type];
   return { x, y, type, r: t.r, hpMax: t.hp, hp: t.hp, crowd: t.crowd, rate: t.rate, owner,
-    prog: 0, regen: 0, flash: 0, pulse: 0, slot: 0, near: 0 };
+    prog: 0, ring: 0, regen: 0, flash: 0, pulse: 0, slot: 0, near: 0 };
 }
 
 // ---------- Dots ----------
 // A free spot in the ring of dots around a base (golden-angle spiral).
 function slotNear(b) {
-  const k = b.slot++ % 90;
-  const a = k * 2.39996 + b.x;
-  const rr = b.r + 10 + Math.sqrt(k) * 4.4;
-  let x = b.x + Math.cos(a) * rr, y = b.y + Math.sin(a) * rr;
-  x = clamp(x, 6, W - 6); y = clamp(y, 6, H - 6);
-  if (inWater(x, y)) { x = b.x + (x - b.x) * 0.6; y = b.y + (y - b.y) * 0.6; }
-  return { x, y };
+  for (let k = 0, ring = 0, R = b.r + 25, i = 0; i < 80; i++, k++) {
+    const cap = Math.floor(2 * Math.PI * R / 27);
+    if (k >= cap) { k = 0; ring++; R += 25; }
+    const a = k / cap * Math.PI * 2 + ring * 0.5 + b.x;
+    let x = clamp(b.x + Math.cos(a) * R, 14, W - 14), y = clamp(b.y + Math.sin(a) * R, 14, H - 14);
+    if (inWater(x, y)) continue;
+    if (dots.some(d => d.team === b.owner && d.idle && Math.abs(d.hx - x) < 14 && Math.abs(d.hy - y) < 14)) continue;
+    return { x, y };
+  }
+  return { x: b.x + (Math.random() - 0.5) * 80, y: b.y + (Math.random() - 0.5) * 80 };
 }
 function spawnAt(b, instant) {
   const home = slotNear(b);
   const a = Math.atan2(home.y - b.y, home.x - b.x);
   const d = { team: b.owner, x: b.x + Math.cos(a) * b.r * 0.8, y: b.y + Math.sin(a) * b.r * 0.8,
     ox: 0, oy: 0, ex: 0, ey: 0, hx: home.x, hy: home.y,
-    route: null, pi: 0, delay: 0, dead: false, idle: true, wob: Math.random() * 6 };
+    route: null, pi: 0, delay: 0, dead: false, idle: true, wob: Math.random() * 6,
+    hp: DOT_HP, cd: Math.random() * FIRE_EVERY, hit: 0, idleT: 0, shield: false, engaged: false };
   if (instant) { d.x = home.x; d.y = home.y; }
   dots.push(d);
   return d;
 }
 function makeRoute(team, pts, target, expected) {
-  const r = { team, pts, target, n: 0, spread: 6 + 3.2 * Math.sqrt(Math.max(1, expected)) };
+  const r = { team, pts, target, n: 0, spread: 6 + 11 * Math.sqrt(Math.max(1, expected)) };
   routes.push(r);
   return r;
 }
@@ -327,12 +331,13 @@ function sendGroup(team, group, pts, target) {
   const p0 = pts[0];
   group.sort((a, b) => Math.hypot(a.x - p0.x, a.y - p0.y) - Math.hypot(b.x - p0.x, b.y - p0.y));
   group.forEach((d, i) => {
+    d.delay = 0;
     releaseDot(d);
     const a = Math.random() * Math.PI * 2, rr = Math.sqrt(Math.random());
     const b = Math.random() * Math.PI * 2, rb = Math.sqrt(Math.random()) * route.spread;
-    d.ox = Math.cos(a) * rr * 7; d.oy = Math.sin(a) * rr * 7;
+    d.ox = Math.cos(a) * rr * 10; d.oy = Math.sin(a) * rr * 10;
     d.ex = Math.cos(b) * rb; d.ey = Math.sin(b) * rb;
-    d.route = route; route.n++; d.pi = 0; d.idle = false; d.delay = i * 0.045;
+    d.route = route; route.n++; d.pi = 0; d.idle = false; d.delay = i * 0.22;
   });
 }
 
@@ -355,7 +360,7 @@ function autoRoute(a, b) {
 function routeLength(pts) { let L = 0; for (let i = 1; i < pts.length; i++) L += dist(pts[i - 1], pts[i]); return L; }
 function centroid(g) { let x = 0, y = 0; for (const d of g) { x += d.x; y += d.y; } return { x: x / g.length, y: y / g.length }; }
 function groupAt(team, p, r) { return dots.filter(d => d.team === team && Math.hypot(d.x - p.x, d.y - p.y) < r); }
-function clusterOf(b, team) { return dots.filter(d => d.team === team && d.idle && Math.hypot(d.x - b.x, d.y - b.y) < b.r + 60); }
+function clusterOf(b, team) { return dots.filter(d => d.team === team && d.idle && Math.hypot(d.x - b.x, d.y - b.y) < b.r + 75); }
 
 function arrive(d, base) {
   releaseDot(d);
@@ -386,6 +391,13 @@ function burst(x, y, color, n) {
 }
 function floater(x, y, text, color) { floaters.push({ x, y, text, color, life: 1.4 }); }
 
+function damage(d, n) {
+  d.hp -= d.shield ? n / 2 : n; d.hit = 0.15;
+  if (d.hp > 0.01) return;
+  d.dead = true; releaseDot(d);
+  if (d.team === RED) stats.killed++; else stats.lost++;
+  burst(d.x, d.y, PAL[d.team].light, 8);
+}
 function launchStrike(team, x, y) { strikes.push({ team, x, y, t: 0.9 }); }
 function detonate(s) {
   const R = 62;
@@ -397,7 +409,7 @@ function detonate(s) {
   }
   for (const b of bases) {
     if (b.owner !== s.team && b.owner !== NEUTRAL && Math.hypot(b.x - s.x, b.y - s.y) < R + b.r * 0.5) {
-      const loss = Math.min(b.hp, 5); b.hp -= loss; b.flash = 0.4;
+      const loss = Math.min(b.hp, 3); b.hp -= loss; b.flash = 0.4;
       if (loss) floater(b.x, b.y - b.r - 14, '-' + loss, '#ffe2a0');
     }
   }
@@ -425,7 +437,7 @@ function aiThink() {
   // Defend: send help to a base about to fall.
   for (const [b, n] of threat) {
     if (n >= b.hp + clusterOf(b, RED).length) {
-      const helper = mine.filter(m => m !== b && clusterOf(m, RED).length >= 5).sort((p, q) => dist(p, b) - dist(q, b))[0];
+      const helper = mine.filter(m => m !== b && clusterOf(m, RED).length >= 3).sort((p, q) => dist(p, b) - dist(q, b))[0];
       if (helper && Math.random() < 0.7) {
         const g = clusterOf(helper, RED);
         sendGroup(RED, g.slice(0, Math.ceil(g.length * 0.7)), autoRoute(helper, b), b);
@@ -437,13 +449,13 @@ function aiThink() {
   let best = null;
   for (const a of mine) {
     const g = clusterOf(a, RED);
-    if (g.length < 5) continue;
+    if (g.length < 3) continue;
     const avail = Math.floor(g.length * cfg.frac);
     for (const t of bases) {
       if (t.owner === RED) continue;
       const pts = autoRoute(a, t);
       const defenders = t.owner === BLUE ? groupAt(BLUE, t, t.r + 70).length : 0;
-      const need = t.hp + defenders + 3 + cfg.greed - (incoming.get(t) || 0);
+      const need = t.hp + defenders * 2 + 1 + cfg.greed - (incoming.get(t) || 0);
       if (need <= 0 || avail < need) continue;
       const score = routeLength(pts) + (t.hp + defenders) * 5 - (t.owner === BLUE ? 70 : 0) - (t.type === 'hq' ? 40 : 0) + Math.random() * 40;
       if (!best || score < best.score) best = { g, t, pts, amount: Math.min(g.length, Math.ceil(need * 1.3) + 2), score };
@@ -463,14 +475,14 @@ function aiThink() {
 function nearest(p, list) { let m = Infinity; for (const q of list) m = Math.min(m, dist(p, q)); return m; }
 function aiStrike() {
   const blues = dots.filter(d => !d.dead && d.team === BLUE);
-  if (blues.length < 8) return false;
+  if (blues.length < 5) return false;
   let best = null, bn = 0;
   for (let i = 0; i < Math.min(50, blues.length); i++) {
     const c = blues[(Math.random() * blues.length) | 0];
     let n = 0; for (const d of blues) if (Math.hypot(d.x - c.x, d.y - c.y) < 60) n++;
     if (n > bn) { bn = n; best = c; }
   }
-  if (bn >= 10) { launchStrike(RED, best.x, best.y); return true; }
+  if (bn >= 5) { launchStrike(RED, best.x, best.y); return true; }
   return false;
 }
 
@@ -489,17 +501,21 @@ function update(dt) {
     crowdTimer = 0.4;
     for (const b of bases) b.near = b.owner === NEUTRAL ? 0 : clusterOf(b, b.owner).length;
   }
-  const count = { 1: 0, 2: 0 };
+  const count = teamCount; count[1] = count[2] = 0;
   for (const d of dots) count[d.team]++;
 
   // Production: new dots step out of the base onto the map
   for (const b of bases) {
-    b.flash = Math.max(0, b.flash - dt); b.pulse = Math.max(0, b.pulse - dt * 1.5);
+    b.flash = Math.max(0, b.flash - dt); b.pulse = Math.max(0, b.pulse - dt * 1.5); b.ring = Math.max(0, b.ring - dt * 2.5);
     if (b.owner === NEUTRAL) { b.prog = 0; continue; }
     if (b.hp < b.hpMax) { b.regen += dt; if (b.regen >= 3) { b.regen = 0; b.hp++; } }
     if (b.near >= b.crowd || count[b.owner] >= TEAM_CAP) { b.prog = 0; continue; }
     b.prog += dt * (b.owner === RED ? cfg.prod : 1) / b.rate;
-    if (b.prog >= 1) { b.prog -= 1; spawnAt(b); b.near++; count[b.owner]++; }
+    if (b.prog >= 1) {
+      b.prog -= 1; b.ring = 1; b.near++; count[b.owner]++;
+      const d = spawnAt(b);
+      d.x = b.x; d.y = b.y - b.r - 7;    // the new dot pops out where the light closes the ring
+    }
   }
 
   // Movement
@@ -511,6 +527,7 @@ function update(dt) {
       if (L > 0.5) { const st = Math.min(L, SPEED * 0.7 * water * dt); d.x += dx / L * st; d.y += dy / L * st; }
       continue;
     }
+    if (d.engaged) continue;          // stop and fight
     if (d.delay > 0) { d.delay -= dt; continue; }
     const pts = d.route.pts, last = pts.length - 1, tgt = d.route.target;
     let step = SPEED * water * dt;
@@ -529,27 +546,42 @@ function update(dt) {
     }
   }
 
-  // Combat (spatial hash)
+  // Combat: each dot fires at the nearest enemy in range. Dots that sit still dig in and take half damage.
   grid.clear();
-  const CS = 18;
-  for (const d of dots) if (!d.dead && d.team === RED) {
-    const k = ((d.x / CS) | 0) * 1000 + ((d.y / CS) | 0);
+  for (const d of dots) if (!d.dead) {
+    const k = ((d.x / RANGE) | 0) * 1000 + ((d.y / RANGE) | 0);
     let c = grid.get(k); if (!c) grid.set(k, c = []); c.push(d);
   }
   for (const d of dots) {
-    if (d.dead || d.team !== BLUE) continue;
-    const cx = (d.x / CS) | 0, cy = (d.y / CS) | 0;
-    let foe = null;
-    for (let i = -1; i <= 1 && !foe; i++) for (let j = -1; j <= 1 && !foe; j++) {
+    if (d.dead) continue;
+    d.cd -= dt; d.hit = Math.max(0, d.hit - dt);
+    d.idleT = d.idle ? d.idleT + dt : 0;
+    d.shield = d.idleT > DIG_IN;
+    const cx = (d.x / RANGE) | 0, cy = (d.y / RANGE) | 0;
+    let foe = null, fd = RANGE;
+    for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) {
       const c = grid.get((cx + i) * 1000 + cy + j); if (!c) continue;
-      for (const e of c) if (!e.dead && Math.abs(e.x - d.x) < HIT_R && Math.abs(e.y - d.y) < HIT_R && Math.hypot(e.x - d.x, e.y - d.y) < HIT_R) { foe = e; break; }
+      for (const e of c) {
+        if (e.team === d.team || e.dead) continue;
+        const L = Math.hypot(e.x - d.x, e.y - d.y);
+        if (L < fd) { fd = L; foe = e; }
+      }
     }
-    if (foe) {
-      d.dead = foe.dead = true; releaseDot(d); releaseDot(foe);
-      stats.killed++; stats.lost++;
-      burst((d.x + foe.x) / 2, (d.y + foe.y) / 2, '#fff2c4', 5);
+    d.engaged = !!foe;
+    if (foe && d.cd <= 0) {
+      d.cd = FIRE_EVERY * (0.85 + Math.random() * 0.3);
+      const a = Math.atan2(foe.y - d.y, foe.x - d.x);
+      bullets.push({ x: d.x + Math.cos(a) * 12, y: d.y + Math.sin(a) * 12, px: d.x, py: d.y, t: foe, team: d.team });
     }
   }
+  for (const u of bullets) {
+    if (u.t.dead) { u.done = true; continue; }
+    const dx = u.t.x - u.x, dy = u.t.y - u.y, L = Math.hypot(dx, dy), st = 320 * dt;
+    u.px = u.x; u.py = u.y;
+    if (L <= st + 10) { u.done = true; damage(u.t, 1); }
+    else { u.x += dx / L * st; u.y += dy / L * st; }
+  }
+  bullets = bullets.filter(u => !u.done);
   if (dots.some(d => d.dead)) dots = dots.filter(d => !d.dead);
   routes = routes.filter(r => r.n > 0);
 
@@ -622,7 +654,7 @@ function resize() {
 
 function buildSprites() {
   for (const team of [BLUE, RED]) {
-    const px = Math.ceil(14 * scale * dpr) + 4;
+    const px = Math.ceil(30 * scale * dpr) + 4;
     const c = document.createElement('canvas'); c.width = c.height = px;
     const g = c.getContext('2d'); const R = px / 2 - 2;
     g.fillStyle = 'rgba(0,0,0,.28)'; g.beginPath(); g.ellipse(px / 2 + R * 0.12, px / 2 + R * 0.28, R * 0.95, R * 0.8, 0, 0, 7); g.fill();
@@ -747,14 +779,37 @@ function draw(now) {
   const hl = drag ? drag.dots : selected ? selected.dots : null;
   if (hl) {
     ctx.fillStyle = 'rgba(255,255,255,' + (0.5 + Math.sin(T * 8) * 0.15) + ')';
-    for (const d of hl) if (!d.dead) { ctx.beginPath(); ctx.arc(d.x, d.y, 8.5, 0, 7); ctx.fill(); }
+    for (const d of hl) if (!d.dead) { ctx.beginPath(); ctx.arc(d.x, d.y, 16, 0, 7); ctx.fill(); }
   }
 
   // dots
-  const ds = 12;
+  const ds = 26;
   for (const d of dots) {
     const bob = d.idle ? Math.sin(T * 3 + d.wob) * 0.6 : 0;
     ctx.drawImage(dotSprites[d.team], d.x - ds / 2, d.y - ds / 2 + bob, ds, ds);
+    if (d.hit > 0) { ctx.fillStyle = 'rgba(255,255,255,.6)'; ctx.beginPath(); ctx.arc(d.x, d.y + bob, 11, 0, 7); ctx.fill(); }
+  }
+  // health bars and dig-in shields
+  for (const d of dots) {
+    const bx = d.x - 11, by = d.y - 20;
+    ctx.fillStyle = 'rgba(10,16,36,.7)'; ctx.fillRect(bx - 1, by - 1, 24, 5);
+    const f = clamp(d.hp / DOT_HP, 0, 1);
+    ctx.fillStyle = f > 0.6 ? '#5ee05a' : f > 0.3 ? '#ffd23c' : '#ff5a4a';
+    ctx.fillRect(bx, by, 22 * f, 3);
+    if (d.shield) {
+      const sx = d.x + 10, sy = d.y - 9;
+      ctx.fillStyle = '#ffc93c'; ctx.strokeStyle = 'rgba(80,50,0,.85)'; ctx.lineWidth = 1.2;
+      ctx.beginPath(); ctx.moveTo(sx, sy - 6); ctx.lineTo(sx + 5.5, sy - 4); ctx.lineTo(sx + 5, sy + 1.5);
+      ctx.quadraticCurveTo(sx + 3.5, sy + 5, sx, sy + 7); ctx.quadraticCurveTo(sx - 3.5, sy + 5, sx - 5, sy + 1.5);
+      ctx.lineTo(sx - 5.5, sy - 4); ctx.closePath(); ctx.fill(); ctx.stroke();
+    }
+  }
+  // shots
+  ctx.lineCap = 'round';
+  for (const u of bullets) {
+    ctx.strokeStyle = u.team === BLUE ? 'rgba(170,210,255,.9)' : 'rgba(255,190,150,.9)'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(u.px, u.py); ctx.lineTo(u.x, u.y); ctx.stroke();
+    ctx.fillStyle = '#fffbe0'; ctx.beginPath(); ctx.arc(u.x, u.y, 2.6, 0, 7); ctx.fill();
   }
 
   // bases
@@ -827,11 +882,8 @@ function drawBase(b, T) {
   gr.addColorStop(0, c.light); gr.addColorStop(0.5, c.main); gr.addColorStop(1, c.dark);
   ctx.fillStyle = gr; ctx.beginPath(); ctx.arc(0, 0, b.r, 0, 7); ctx.fill();
   ctx.strokeStyle = b.flash > 0 ? '#ffe08a' : 'rgba(255,255,255,.9)'; ctx.lineWidth = 3; ctx.stroke();
-  // production ring
-  if (b.owner !== NEUTRAL && b.near < b.crowd) {
-    ctx.strokeStyle = 'rgba(255,255,255,.75)'; ctx.lineWidth = 2.5;
-    ctx.beginPath(); ctx.arc(0, 0, b.r + 4, -Math.PI / 2, -Math.PI / 2 + b.prog * Math.PI * 2); ctx.stroke();
-  }
+  // spawn timer: a light runs once around the ring; when it closes the loop a dot spawns
+  if (b.owner !== NEUTRAL) drawSpawnLight(b, c, T);
   // icon
   ctx.fillStyle = 'rgba(255,255,255,.95)'; ctx.strokeStyle = c.dark; ctx.lineWidth = 1.5;
   const k = b.r / 30;
@@ -870,6 +922,36 @@ function shield(b, c) {
     ctx.fillRect(x, y - 2, w, 4); x += w + 1;
   }
 }
+function drawSpawnLight(b, c, T) {
+  const R = b.r + 6.5, top = -Math.PI / 2;
+  const full = b.near >= b.crowd || teamCount[b.owner] >= TEAM_CAP;
+  const glow = 12 * dpr * scale;
+  // track
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = 'rgba(10,16,36,.5)'; ctx.lineWidth = 7;
+  ctx.beginPath(); ctx.arc(0, 0, R, 0, Math.PI * 2); ctx.stroke();
+  if (full) {                       // crowd is full: the light waits at the top, dimly pulsing
+    ctx.fillStyle = c.light; ctx.globalAlpha = 0.35 + 0.2 * Math.sin(T * 3);
+    ctx.beginPath(); ctx.arc(0, -R, 4, 0, 7); ctx.fill(); ctx.globalAlpha = 1;
+    return;
+  }
+  const end = top + b.prog * Math.PI * 2;
+  ctx.save();
+  ctx.shadowColor = c.light; ctx.shadowBlur = glow;
+  // lit arc, brighter toward the head
+  ctx.strokeStyle = c.light; ctx.lineWidth = 5; ctx.globalAlpha = 0.9;
+  ctx.beginPath(); ctx.arc(0, 0, R, top, end); ctx.stroke();
+  // the light itself
+  const hx = Math.cos(end) * R, hy = Math.sin(end) * R;
+  ctx.globalAlpha = 1; ctx.fillStyle = '#ffffff';
+  ctx.beginPath(); ctx.arc(hx, hy, 5, 0, 7); ctx.fill();
+  // flash of the whole ring as a dot spawns
+  if (b.ring > 0) {
+    ctx.globalAlpha = b.ring; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 5 + b.ring * 4;
+    ctx.beginPath(); ctx.arc(0, 0, R, 0, Math.PI * 2); ctx.stroke();
+  }
+  ctx.restore();
+}
 function pill(x, y, text, color, size) {
   ctx.font = `${size}px "Lilita One", "Trebuchet MS", sans-serif`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -896,7 +978,7 @@ function targetAt(p, exclude) { const b = baseAt(p, 20); return b && b !== exclu
 // Grab blue dots under the finger. On one of your bases, grab its whole crowd.
 function grab(p) {
   const b = baseAt(p, 10);
-  if (b && b.owner === BLUE) return { base: b, dots: groupAt(BLUE, b, b.r + 62) };
+  if (b && b.owner === BLUE) return { base: b, dots: groupAt(BLUE, b, b.r + 75) };
   return { base: null, dots: groupAt(BLUE, p, GRAB_R) };
 }
 
@@ -910,9 +992,9 @@ cv.addEventListener('pointerdown', e => {
   if (armed === 'supply') {
     const b = baseAt(p, 16);
     if (b && b.owner === BLUE) {
-      for (let i = 0; i < 12; i++) spawnAt(b);
+      for (let i = 0; i < 5; i++) spawnAt(b);
       b.pulse = 1; supplyCd = SUPPLY_CD; armed = null;
-      floater(b.x, b.y - b.r - 16, '+12', '#ffffff'); burst(b.x, b.y, '#ffe08a', 14);
+      floater(b.x, b.y - b.r - 16, '+5', '#ffffff'); burst(b.x, b.y, '#ffe08a', 14);
       syncTools();
     } else { flashHint('Tap one of your blue bases for the supply drop'); }
     return;

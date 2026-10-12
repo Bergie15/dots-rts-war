@@ -63,7 +63,7 @@ body {
 #timer.low { color: var(--gold); }
 
 /* Battlefield */
-#stage { position: relative; flex: 1; min-height: 0; background: var(--grass); }
+#stage { position: relative; flex: 1; min-height: 0; background: #8fb52c; }
 #cv { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; display: block; }
 #hint {
   position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%);
@@ -168,7 +168,7 @@ body {
           <li><span>1</span><span>A light runs around each base. When it closes the ring, a new <b>blue dot</b> steps out.</span></li>
           <li><span>2</span><span><b>Drag from a group of dots</b> and draw a path. They march along your line.</span></li>
           <li><span>3</span><span>End on a base to <b>capture</b> it, or anywhere to hold ground. Or tap a group, then tap where to go.</span></li>
-          <li><span>4</span><span>Dots <b>shoot</b> enemies in range. Dots that stand still <b>dig in</b> and take half damage. Use the bridges.</span></li>
+          <li><span>4</span><span>Dots <b>shoot</b> enemies in range and dig in when they stand still. <b>Hills</b> give range and cover, water slows, rock blocks. Your HQ also builds <b>tanks</b>.</span></li>
         </ul>
         <button class="btn" id="playBtn">Deploy</button>
         <p class="record" id="record"></p>
@@ -216,9 +216,13 @@ const PAL = {
   2: { main: '#e5423a', dark: '#8c1a16', light: '#ffa49d' },
 };
 const SPEED = 40;            // world units per second
-const RANGE = 95;            // how far a dot can shoot
-const FIRE_EVERY = 1.0;      // seconds between shots
-const DOT_HP = 3;
+// Unit kinds. Tanks come out of the HQ every fourth spawn.
+const UNIT = {
+  inf:  { hp: 3, dmg: 1, range: 95,  fire: 1.0, speed: 1,    size: 26 },
+  tank: { hp: 8, dmg: 2, range: 120, fire: 1.6, speed: 0.62, size: 40 },
+};
+const CELL = 150;            // combat grid; larger than the longest range
+const HILL_RANGE = 1.2, HILL_ARMOR = 0.75;   // high ground: longer range, less damage taken
 const DIG_IN = 1.5;          // seconds standing still before a dot gets its shield
 const MATCH_TIME = 180;
 const RIVER_HALF = 24;
@@ -237,9 +241,33 @@ const DIFF = {
 };
 const GRAB_R = 60;           // how far from your finger dots get picked up
 
+// Terrain for the bottom half; the top half mirrors it.
+const mirror = list => list.concat(list.map(o => ({ ...o, x: W - o.x, y: H - o.y })));
+const MOUNTAINS = mirror([
+  { x: 40, y: 958, r: 62 }, { x: 122, y: 1004, r: 46 }, { x: -6, y: 870, r: 44 },
+  { x: 606, y: 706, r: 52 }, { x: 330, y: 612, r: 28 },
+]);
+const HILLS = mirror([
+  { x: 252, y: 646, rx: 60, ry: 36 }, { x: 562, y: 790, rx: 40, ry: 56 }, { x: 42, y: 630, rx: 38, ry: 50 },
+]);
+const PONDS = mirror([{ x: 262, y: 842, rx: 38, ry: 22 }]);
+const inEllipse = (e, x, y, pad = 0) => ((x - e.x) / (e.rx + pad)) ** 2 + ((y - e.y) / (e.ry + pad)) ** 2 < 1;
 const riverY = x => 500 + 70 * Math.sin((x - 300) / 600 * Math.PI * 2);
 const onBridge = x => BRIDGES.some(b => Math.abs(x - b) < 26);
-const inWater = (x, y) => Math.abs(y - riverY(x)) < RIVER_HALF && !onBridge(x);
+const inWater = (x, y) => (Math.abs(y - riverY(x)) < RIVER_HALF && !onBridge(x)) || PONDS.some(p => inEllipse(p, x, y));
+const onHill = (x, y) => HILLS.some(h => inEllipse(h, x, y));
+const inMountain = (x, y, pad = 0) => MOUNTAINS.some(m => Math.hypot(x - m.x, y - m.y) < m.r + pad);
+// Push a point out of any mountain, nudging sideways so units slide around rock instead of sticking.
+function pushOut(p, pad, side) {
+  for (const m of MOUNTAINS) {
+    const dx = p.x - m.x, dy = p.y - m.y, L = Math.hypot(dx, dy) || 1, R = m.r + pad;
+    if (L < R) {
+      const nx = dx / L, ny = dy / L;
+      p.x = m.x + nx * R - ny * side * 1.2; p.y = m.y + ny * R + nx * side * 1.2;
+    }
+  }
+  return p;
+}
 const sideOf = (x, y) => (y > riverY(x) ? 1 : -1);
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -284,11 +312,12 @@ function newGame() {
   stats = { killed: 0, lost: 0, captured: 0 };
   hintEl.hidden = false; hintEl.textContent = 'Drag from your blue dots to send them';
   syncTools();
+  computeField();
 }
 function mkBase(x, y, type, owner) {
   const t = TYPES[type];
   return { x, y, type, r: t.r, hpMax: t.hp, hp: t.hp, crowd: t.crowd, rate: t.rate, owner,
-    prog: 0, ring: 0, regen: 0, flash: 0, pulse: 0, slot: 0, near: 0 };
+    prog: 0, ring: 0, made: 0, regen: 0, flash: 0, pulse: 0, slot: 0, near: 0 };
 }
 
 // ---------- Dots ----------
@@ -300,23 +329,26 @@ function slotNear(b) {
     const a = k / cap * Math.PI * 2 + ring * 0.5 + b.x;
     let x = clamp(b.x + Math.cos(a) * R, 14, W - 14), y = clamp(b.y + Math.sin(a) * R, 14, H - 14);
     if (inWater(x, y)) continue;
+    if (inMountain(x, y, 16)) continue;
     if (dots.some(d => d.team === b.owner && d.idle && Math.abs(d.hx - x) < 14 && Math.abs(d.hy - y) < 14)) continue;
     return { x, y };
   }
   return { x: b.x + (Math.random() - 0.5) * 80, y: b.y + (Math.random() - 0.5) * 80 };
 }
-function spawnAt(b, instant) {
+function spawnAt(b, instant, kind = 'inf') {
   const home = slotNear(b);
   const a = Math.atan2(home.y - b.y, home.x - b.x);
   const d = { team: b.owner, x: b.x + Math.cos(a) * b.r * 0.8, y: b.y + Math.sin(a) * b.r * 0.8,
     ox: 0, oy: 0, ex: 0, ey: 0, hx: home.x, hy: home.y,
     route: null, pi: 0, delay: 0, dead: false, idle: true, wob: Math.random() * 6,
-    hp: DOT_HP, cd: Math.random() * FIRE_EVERY, hit: 0, idleT: 0, shield: false, engaged: false };
+    kind, u: UNIT[kind], hp: UNIT[kind].hp, cd: Math.random() * UNIT[kind].fire, hit: 0, idleT: 0, shield: false, engaged: false,
+    side: Math.random() < 0.5 ? -1 : 1 };
   if (instant) { d.x = home.x; d.y = home.y; }
   dots.push(d);
   return d;
 }
 function makeRoute(team, pts, target, expected) {
+  pts = pts.map((p, i) => (i === pts.length - 1 && target) ? p : pushOut({ x: p.x, y: p.y }, 14, 1));
   const r = { team, pts, target, n: 0, spread: 6 + 11 * Math.sqrt(Math.max(1, expected)) };
   routes.push(r);
   return r;
@@ -370,7 +402,7 @@ function arrive(d, base) {
   }
   d.dead = true;
   if (base.hp > 0) {
-    base.hp--; base.flash = 0.25;
+    base.hp = Math.max(0, base.hp - d.u.dmg); base.flash = 0.25;
     burst(base.x + (d.x - base.x) * 0.6, base.y + (d.y - base.y) * 0.6, PAL[d.team].main, 4);
     return;
   }
@@ -392,7 +424,7 @@ function burst(x, y, color, n) {
 function floater(x, y, text, color) { floaters.push({ x, y, text, color, life: 1.4 }); }
 
 function damage(d, n) {
-  d.hp -= d.shield ? n / 2 : n; d.hit = 0.15;
+  d.hp -= n * (d.shield ? 0.5 : 1) * (d.high ? HILL_ARMOR : 1); d.hit = 0.15;
   if (d.hp > 0.01) return;
   d.dead = true; releaseDot(d);
   if (d.team === RED) stats.killed++; else stats.lost++;
@@ -486,6 +518,60 @@ function aiStrike() {
   return false;
 }
 
+// ---------- Fog of war & front line ----------
+// A coarse grid over the map. `vis` is how well blue sees each point; `inf` is blue minus red presence.
+const GS = 20, GX = W / GS + 1, GY = H / GS + 1;
+const vis = new Float32Array(GX * GY), inf = new Float32Array(GX * GY);
+let frontSegs = [], fieldTimer = 0;
+const fogCv = document.createElement('canvas'); fogCv.width = GX; fogCv.height = GY;
+const fogCtx = fogCv.getContext('2d'), fogImg = fogCtx.createImageData(GX, GY);
+function addPresence(x, y, team, seeR, holdR, w) {
+  const Rr = Math.max(seeR, holdR);
+  const i0 = Math.max(0, Math.floor((x - Rr) / GS)), i1 = Math.min(GX - 1, Math.ceil((x + Rr) / GS));
+  const j0 = Math.max(0, Math.floor((y - Rr) / GS)), j1 = Math.min(GY - 1, Math.ceil((y + Rr) / GS));
+  const sgn = team === BLUE ? 1 : -1;
+  for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+    const d = Math.hypot(i * GS - x, j * GS - y), k = j * GX + i;
+    if (team === BLUE && d < seeR) { const v = Math.min(1, (seeR - d) / 40); if (v > vis[k]) vis[k] = v; }
+    if (d < holdR) inf[k] += sgn * w * (1 - d / holdR);
+  }
+}
+function computeField() {
+  vis.fill(0); inf.fill(0);
+  for (const b of bases) if (b.owner !== NEUTRAL) addPresence(b.x, b.y, b.owner, 175, 175, 2);
+  for (const d of dots) addPresence(d.x, d.y, d.team, d.kind === 'tank' ? 145 : 130, 120, d.kind === 'tank' ? 1.5 : 1);
+  const px = fogImg.data;
+  for (let k = 0; k < vis.length; k++) {
+    px[k * 4] = 16; px[k * 4 + 1] = 28; px[k * 4 + 2] = 2; px[k * 4 + 3] = (1 - vis[k]) * 178;
+  }
+  fogCtx.putImageData(fogImg, 0, 0);
+  // Front line: marching squares on the zero contour where both armies have presence.
+  const segs = [];
+  for (let j = 0; j < GY - 1; j++) for (let i = 0; i < GX - 1; i++) {
+    const k = j * GX + i;
+    const f = [inf[k], inf[k + 1], inf[k + GX + 1], inf[k + GX]];
+    const mx = Math.max(...f), mn = Math.min(...f);
+    if (!(mx > 0.04 && mn < -0.04)) continue;
+    const x0 = i * GS, y0 = j * GS;
+    const P = [[x0, y0], [x0 + GS, y0], [x0 + GS, y0 + GS], [x0, y0 + GS]];
+    const pts = [];
+    for (let e = 0; e < 4; e++) {
+      const a = f[e], b = f[(e + 1) % 4];
+      if ((a > 0) !== (b > 0)) {
+        const t = a / (a - b), A = P[e], B = P[(e + 1) % 4];
+        pts.push(A[0] + (B[0] - A[0]) * t, A[1] + (B[1] - A[1]) * t);
+      }
+    }
+    if (pts.length >= 4) segs.push(pts.slice(0, 4));
+    if (pts.length >= 8) segs.push(pts.slice(4, 8));
+  }
+  frontSegs = segs;
+}
+function seen(x, y) {
+  const i = clamp(Math.round(x / GS), 0, GX - 1), j = clamp(Math.round(y / GS), 0, GY - 1);
+  return vis[j * GX + i] > 0.3;
+}
+
 // ---------- Update ----------
 let shake = 0;
 const grid = new Map();
@@ -513,7 +599,8 @@ function update(dt) {
     b.prog += dt * (b.owner === RED ? cfg.prod : 1) / b.rate;
     if (b.prog >= 1) {
       b.prog -= 1; b.ring = 1; b.near++; count[b.owner]++;
-      const d = spawnAt(b);
+      b.made++;
+      const d = spawnAt(b, false, b.type === 'hq' && b.made % 4 === 0 ? 'tank' : 'inf');
       d.x = b.x; d.y = b.y - b.r - 7;    // the new dot pops out where the light closes the ring
     }
   }
@@ -521,10 +608,10 @@ function update(dt) {
   // Movement
   for (const d of dots) {
     if (d.dead) continue;
-    const water = inWater(d.x, d.y) ? 0.38 : 1;
+    const water = (inWater(d.x, d.y) ? 0.38 : 1) * d.u.speed;
     if (d.idle) { // drift to its spot
       const dx = d.hx - d.x, dy = d.hy - d.y, L = Math.hypot(dx, dy);
-      if (L > 0.5) { const st = Math.min(L, SPEED * 0.7 * water * dt); d.x += dx / L * st; d.y += dy / L * st; }
+      if (L > 0.5) { const st = Math.min(L, SPEED * 0.7 * water * dt); d.x += dx / L * st; d.y += dy / L * st; pushOut(d, d.u.size / 2, d.side); }
       continue;
     }
     if (d.engaged) continue;          // stop and fight
@@ -540,6 +627,7 @@ function update(dt) {
       if (L <= step) { d.x = tx; d.y = ty; step -= L; d.pi++; }
       else { d.x += dx / L * step; d.y += dy / L * step; step = 0; }
     }
+    pushOut(d, d.u.size / 2, d.side);
     if (d.pi > last) {
       if (tgt) arrive(d, tgt);
       else { releaseDot(d); d.idle = true; d.hx = d.x; d.hy = d.y; }
@@ -549,16 +637,17 @@ function update(dt) {
   // Combat: each dot fires at the nearest enemy in range. Dots that sit still dig in and take half damage.
   grid.clear();
   for (const d of dots) if (!d.dead) {
-    const k = ((d.x / RANGE) | 0) * 1000 + ((d.y / RANGE) | 0);
+    const k = ((d.x / CELL) | 0) * 1000 + ((d.y / CELL) | 0);
     let c = grid.get(k); if (!c) grid.set(k, c = []); c.push(d);
   }
   for (const d of dots) {
     if (d.dead) continue;
     d.cd -= dt; d.hit = Math.max(0, d.hit - dt);
-    d.idleT = d.idle ? d.idleT + dt : 0;
+    d.idleT = d.idle && !inWater(d.x, d.y) ? d.idleT + dt : 0;   // no digging in while wading
     d.shield = d.idleT > DIG_IN;
-    const cx = (d.x / RANGE) | 0, cy = (d.y / RANGE) | 0;
-    let foe = null, fd = RANGE;
+    d.high = onHill(d.x, d.y);
+    const cx = (d.x / CELL) | 0, cy = (d.y / CELL) | 0;
+    let foe = null, fd = d.u.range * (d.high ? HILL_RANGE : 1);
     for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) {
       const c = grid.get((cx + i) * 1000 + cy + j); if (!c) continue;
       for (const e of c) {
@@ -569,21 +658,25 @@ function update(dt) {
     }
     d.engaged = !!foe;
     if (foe && d.cd <= 0) {
-      d.cd = FIRE_EVERY * (0.85 + Math.random() * 0.3);
-      const a = Math.atan2(foe.y - d.y, foe.x - d.x);
-      bullets.push({ x: d.x + Math.cos(a) * 12, y: d.y + Math.sin(a) * 12, px: d.x, py: d.y, t: foe, team: d.team });
+      d.cd = d.u.fire * (0.85 + Math.random() * 0.3);
+      const a = Math.atan2(foe.y - d.y, foe.x - d.x), o = d.u.size / 2;
+      d.aim = a;
+      bullets.push({ x: d.x + Math.cos(a) * o, y: d.y + Math.sin(a) * o, px: d.x, py: d.y, t: foe, team: d.team, dmg: d.u.dmg, big: d.kind === 'tank' });
     }
   }
   for (const u of bullets) {
     if (u.t.dead) { u.done = true; continue; }
     const dx = u.t.x - u.x, dy = u.t.y - u.y, L = Math.hypot(dx, dy), st = 320 * dt;
     u.px = u.x; u.py = u.y;
-    if (L <= st + 10) { u.done = true; damage(u.t, 1); }
+    if (L <= st + 10) { u.done = true; damage(u.t, u.dmg); }
     else { u.x += dx / L * st; u.y += dy / L * st; }
   }
   bullets = bullets.filter(u => !u.done);
   if (dots.some(d => d.dead)) dots = dots.filter(d => !d.dead);
   routes = routes.filter(r => r.n > 0);
+
+  fieldTimer -= dt;
+  if (fieldTimer <= 0) { fieldTimer = 0.15; computeField(); }
 
   // Strikes
   for (const s of strikes) { s.t -= dt; if (s.t <= 0) detonate(s); }
@@ -654,41 +747,67 @@ function resize() {
 
 function buildSprites() {
   for (const team of [BLUE, RED]) {
-    const px = Math.ceil(30 * scale * dpr) + 4;
-    const c = document.createElement('canvas'); c.width = c.height = px;
-    const g = c.getContext('2d'); const R = px / 2 - 2;
-    g.fillStyle = 'rgba(0,0,0,.28)'; g.beginPath(); g.ellipse(px / 2 + R * 0.12, px / 2 + R * 0.28, R * 0.95, R * 0.8, 0, 0, 7); g.fill();
-    const gr = g.createRadialGradient(px / 2 - R * 0.35, px / 2 - R * 0.4, R * 0.1, px / 2, px / 2, R);
-    gr.addColorStop(0, PAL[team].light); gr.addColorStop(0.45, PAL[team].main); gr.addColorStop(1, PAL[team].dark);
-    g.fillStyle = gr; g.beginPath(); g.arc(px / 2, px / 2, R * 0.86, 0, 7); g.fill();
-    g.strokeStyle = 'rgba(255,255,255,.85)'; g.lineWidth = Math.max(1, R * 0.16); g.stroke();
-    dotSprites[team] = c;
+    for (const kind of ['inf', 'tank']) {
+      const sz = UNIT[kind].size + 6;
+      const px = Math.ceil(sz * scale * dpr) + 4;
+      const c = document.createElement('canvas'); c.width = c.height = px;
+      const g = c.getContext('2d'); const k = px / sz; g.scale(k, k);
+      const m = sz / 2, R = UNIT[kind].size / 2;
+      g.fillStyle = 'rgba(0,0,0,.28)'; g.beginPath(); g.ellipse(m + 1.5, m + 3, R, R * 0.85, 0, 0, 7); g.fill();
+      const gr = g.createRadialGradient(m - R * 0.35, m - R * 0.45, R * 0.1, m, m, R);
+      gr.addColorStop(0, PAL[team].light); gr.addColorStop(0.45, PAL[team].main); gr.addColorStop(1, PAL[team].dark);
+      g.fillStyle = gr; g.beginPath(); g.arc(m, m, R - 1, 0, 7); g.fill();
+      g.strokeStyle = PAL[team].dark; g.lineWidth = 2; g.stroke();
+      g.fillStyle = 'rgba(255,255,255,.55)'; g.beginPath(); g.ellipse(m - R * 0.3, m - R * 0.45, R * 0.35, R * 0.2, -0.5, 0, 7); g.fill();
+      if (kind === 'tank') {   // white tank badge
+        g.fillStyle = '#ffffff'; g.strokeStyle = '#ffffff'; g.lineWidth = 2.2; g.lineCap = 'round';
+        g.beginPath(); g.roundRect ? g.roundRect(m - 10, m + 1, 20, 7, 3.5) : g.rect(m - 10, m + 1, 20, 7); g.fill();
+        g.beginPath(); g.roundRect ? g.roundRect(m - 6, m - 5, 11, 7, 2) : g.rect(m - 6, m - 5, 11, 7); g.fill();
+        g.beginPath(); g.moveTo(m + 4, m - 2.5); g.lineTo(m + 12, m - 2.5); g.stroke();
+        g.fillStyle = PAL[team].dark;
+        for (const wx of [-6, 0, 6]) { g.beginPath(); g.arc(m + wx, m + 4.5, 1.8, 0, 7); g.fill(); }
+      }
+      dotSprites[team + kind] = c;
+    }
   }
 }
 
 function buildBackground() {
   bg = document.createElement('canvas'); bg.width = cv.width; bg.height = cv.height;
   const g = bg.getContext('2d');
-  g.fillStyle = '#6aa848'; g.fillRect(0, 0, bg.width, bg.height);
+  g.fillStyle = '#8fb52c'; g.fillRect(0, 0, bg.width, bg.height);
   g.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * offX, dpr * offY);
-  const rnd = mulberry(7);
+  const rnd = mulberry(11);
+  const ell = (x, y, rx, ry) => { g.beginPath(); g.ellipse(x, y, rx, ry, 0, 0, 7); g.fill(); };
   // ground
-  g.fillStyle = '#7fbf55'; g.fillRect(0, 0, W, H);
-  for (let i = 0; i < 70; i++) {
-    const x = rnd() * W, y = rnd() * H, r = 25 + rnd() * 70;
-    g.fillStyle = rnd() < 0.5 ? 'rgba(160,214,110,.35)' : 'rgba(92,160,64,.30)';
-    blob(g, x, y, r, rnd);
+  g.fillStyle = '#b3d83a'; g.fillRect(0, 0, W, H);
+  for (let i = 0; i < 60; i++) {
+    g.fillStyle = rnd() < 0.5 ? 'rgba(210,240,100,.35)' : 'rgba(140,185,40,.25)';
+    blob(g, rnd() * W, rnd() * H, 30 + rnd() * 70, rnd);
   }
-  // sandy clearings under bases
+  // high ground: raised plateaus with a cliff edge and contour line
+  for (const h of HILLS) {
+    g.fillStyle = 'rgba(50,80,5,.35)'; ell(h.x + 5, h.y + 12, h.rx + 3, h.ry + 3);
+    g.fillStyle = '#76981c'; ell(h.x, h.y + 7, h.rx, h.ry);
+    g.fillStyle = '#d6f070'; ell(h.x, h.y, h.rx, h.ry);
+    g.strokeStyle = 'rgba(130,170,35,.7)'; g.lineWidth = 1.5;
+    g.beginPath(); g.ellipse(h.x, h.y, h.rx * 0.62, h.ry * 0.6, 0, 0, 7); g.stroke();
+    g.fillStyle = 'rgba(110,150,25,.8)';
+    g.beginPath(); g.moveTo(h.x - 5, h.y + 3); g.lineTo(h.x, h.y - 4); g.lineTo(h.x + 5, h.y + 3); g.closePath(); g.fill();
+  }
+  // clearings under bases
   for (const L of LAYOUT) for (const [x, y] of [[L.x, L.y], [W - L.x, H - L.y]]) {
-    g.fillStyle = 'rgba(232,212,150,.55)'; blob(g, x, y, TYPES[L.type].r + 20, rnd);
+    g.fillStyle = 'rgba(225,245,150,.6)'; blob(g, x, y, TYPES[L.type].r + 22, rnd);
   }
-  // river
+  // river and ponds
   const riverPath = () => { g.beginPath(); for (let x = -20; x <= W + 20; x += 6) { const y = riverY(x); x === -20 ? g.moveTo(x, y) : g.lineTo(x, y); } };
   g.lineCap = 'round'; g.lineJoin = 'round';
-  riverPath(); g.strokeStyle = '#d8c387'; g.lineWidth = RIVER_HALF * 2 + 14; g.stroke();
+  riverPath(); g.strokeStyle = '#7d9e22'; g.lineWidth = RIVER_HALF * 2 + 12; g.stroke();
+  for (const p of PONDS) { g.fillStyle = '#7d9e22'; ell(p.x, p.y, p.rx + 6, p.ry + 6); }
   riverPath(); g.strokeStyle = '#3d93d6'; g.lineWidth = RIVER_HALF * 2; g.stroke();
+  for (const p of PONDS) { g.fillStyle = '#3d93d6'; ell(p.x, p.y, p.rx, p.ry); }
   riverPath(); g.strokeStyle = '#5fb0ea'; g.lineWidth = RIVER_HALF * 1.2; g.stroke();
+  for (const p of PONDS) { g.fillStyle = '#5fb0ea'; ell(p.x, p.y, p.rx * 0.65, p.ry * 0.55); }
   g.setLineDash([14, 22]); riverPath(); g.strokeStyle = 'rgba(255,255,255,.45)'; g.lineWidth = 2; g.stroke(); g.setLineDash([]);
   // bridges
   for (const bx of BRIDGES) {
@@ -701,44 +820,48 @@ function buildBackground() {
     g.fillStyle = '#6e4520'; g.fillRect(-w / 2 - 3, -h / 2, 5, h); g.fillRect(w / 2 - 2, -h / 2, 5, h);
     g.restore();
   }
-  // trees and rocks, kept clear of bases, bridges and river
+  // forests, kept clear of bases, water, hills and rock
   const clear = (x, y, pad) => {
     if (Math.abs(y - riverY(x)) < RIVER_HALF + 18 + pad) return false;
-    for (const L of LAYOUT) for (const [bx, by] of [[L.x, L.y], [W - L.x, H - L.y]]) if (Math.hypot(x - bx, y - by) < TYPES[L.type].r + 26 + pad) return false;
+    if (PONDS.some(p => inEllipse(p, x, y, 12 + pad)) || HILLS.some(h => inEllipse(h, x, y, 8 + pad)) || inMountain(x, y, 8 + pad)) return false;
+    for (const L of LAYOUT) for (const [bx, by] of [[L.x, L.y], [W - L.x, H - L.y]]) if (Math.hypot(x - bx, y - by) < TYPES[L.type].r + 70 + pad) return false;
     return true;
   };
-  const clumps = [];
-  for (let i = 0; i < 400 && clumps.length < 13; i++) {
+  const woods = [];
+  for (let i = 0; i < 600 && woods.length < 10; i++) {
     const x = 20 + rnd() * (W - 40), y = 20 + rnd() * (H / 2 - 40);
-    if (clear(x, y, 22) && clumps.every(c => Math.hypot(c.x - x, c.y - y) > 80)) { clumps.push({ x, y }); clumps.push({ x: W - x, y: H - y }); }
+    if (clear(x, y, 26) && woods.every(c => Math.hypot(c.x - x, c.y - y) > 110)) { woods.push({ x, y }); woods.push({ x: W - x, y: H - y }); }
   }
-  for (const c of clumps) {
-    const n = 3 + Math.floor(rnd() * 5);
+  for (const c of woods) {
     const trees = [];
-    for (let k = 0; k < n; k++) trees.push({ x: c.x + (rnd() - 0.5) * 44, y: c.y + (rnd() - 0.5) * 36, r: 8 + rnd() * 6 });
+    const n = 7 + Math.floor(rnd() * 8);
+    for (let k = 0; k < n; k++) trees.push({ x: c.x + (rnd() - 0.5) * 70, y: c.y + (rnd() - 0.5) * 50, r: 9 + rnd() * 7 });
     trees.sort((a, b) => a.y - b.y);
-    for (const t of trees) { g.fillStyle = 'rgba(30,60,20,.28)'; g.beginPath(); g.ellipse(t.x + 3, t.y + t.r * 0.7, t.r, t.r * 0.5, 0, 0, 7); g.fill(); }
+    for (const t of trees) { g.fillStyle = 'rgba(40,70,10,.3)'; ell(t.x + 3, t.y + t.r * 0.6, t.r + 1, t.r * 0.6); }
     for (const t of trees) {
-      g.fillStyle = '#2f7a35'; g.beginPath(); g.arc(t.x, t.y, t.r, 0, 7); g.fill();
-      g.fillStyle = '#46a046'; g.beginPath(); g.arc(t.x - t.r * 0.25, t.y - t.r * 0.3, t.r * 0.62, 0, 7); g.fill();
-      g.fillStyle = 'rgba(190,240,140,.35)'; g.beginPath(); g.arc(t.x - t.r * 0.4, t.y - t.r * 0.45, t.r * 0.25, 0, 7); g.fill();
+      g.fillStyle = '#356f25'; g.beginPath(); g.arc(t.x, t.y, t.r + 1.5, 0, 7); g.fill();
+      g.fillStyle = '#4c9433'; g.beginPath(); g.arc(t.x, t.y, t.r, 0, 7); g.fill();
+      g.fillStyle = '#62ab42'; g.beginPath(); g.arc(t.x - t.r * 0.3, t.y - t.r * 0.3, t.r * 0.55, 0, 7); g.fill();
     }
   }
-  for (let i = 0, placed = 0; i < 300 && placed < 9; i++) {
-    const x = rnd() * W, y = rnd() * H / 2;
-    if (!clear(x, y, 6)) continue;
-    placed++;
-    for (const [rx, ry] of [[x, y], [W - x, H - y]]) {
-      const r = 4 + rnd() * 5;
-      g.fillStyle = 'rgba(0,0,0,.2)'; g.beginPath(); g.ellipse(rx + 2, ry + 2, r, r * 0.7, 0, 0, 7); g.fill();
-      g.fillStyle = '#a9a39a'; g.beginPath(); g.ellipse(rx, ry, r, r * 0.72, 0, 0, 7); g.fill();
-      g.fillStyle = '#cfc9bf'; g.beginPath(); g.ellipse(rx - r * 0.25, ry - r * 0.25, r * 0.45, r * 0.3, 0, 0, 7); g.fill();
+  // mountains: stacked grey rock
+  for (const m of MOUNTAINS) {
+    g.fillStyle = 'rgba(30,40,10,.35)'; ell(m.x + 6, m.y + 10, m.r * 1.05, m.r * 0.9);
+    g.fillStyle = '#41464f'; blob(g, m.x, m.y, m.r * 1.04, rnd);
+    g.fillStyle = '#5c626d'; blob(g, m.x, m.y, m.r * 0.94, rnd);
+    const n = 3 + Math.floor(m.r / 18);
+    for (let k = 0; k < n; k++) {
+      const a = rnd() * Math.PI * 2, rr = rnd() * m.r * 0.45, sr = m.r * (0.32 + rnd() * 0.2);
+      const x = m.x + Math.cos(a) * rr, y = m.y + Math.sin(a) * rr;
+      g.fillStyle = '#4b5059'; blob(g, x + 2, y + 3, sr, rnd);
+      g.fillStyle = '#7a818c'; blob(g, x, y, sr * 0.92, rnd);
+      g.fillStyle = '#9aa1ab'; blob(g, x - sr * 0.25, y - sr * 0.3, sr * 0.45, rnd);
     }
   }
   // grass tufts
-  g.strokeStyle = 'rgba(60,120,40,.45)'; g.lineWidth = 1.4;
+  g.strokeStyle = 'rgba(110,150,25,.6)'; g.lineWidth = 1.4;
   for (let i = 0; i < 160; i++) {
-    const x = rnd() * W, y = rnd() * H; if (!clear(x, y, 0)) continue;
+    const x = rnd() * W, y = rnd() * H; if (!clear(x, y, -60)) continue;
     g.beginPath(); g.moveTo(x - 3, y); g.lineTo(x - 1, y - 5); g.moveTo(x, y); g.lineTo(x + 1, y - 6); g.moveTo(x + 3, y); g.lineTo(x + 4, y - 4); g.stroke();
   }
 }
@@ -760,9 +883,18 @@ function draw(now) {
   ctx.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * (offX + sx), dpr * (offY + sy));
   const T = now / 1000;
 
-  // routes
+  // front line between the armies
   ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  if (frontSegs.length) {
+    ctx.beginPath();
+    for (const p of frontSegs) { ctx.moveTo(p[0], p[1]); ctx.lineTo(p[2], p[3]); }
+    ctx.strokeStyle = 'rgba(255,255,255,.25)'; ctx.lineWidth = 7; ctx.stroke();
+    ctx.strokeStyle = '#1b2140'; ctx.lineWidth = 4; ctx.stroke();
+  }
+
+  // routes (enemy plans stay hidden)
   for (const r of routes) {
+    if (r.team !== BLUE) continue;
     ctx.setLineDash([5, 7]); ctx.lineDashOffset = -T * 24;
     ctx.strokeStyle = r.team === BLUE ? 'rgba(18,40,110,.75)' : 'rgba(110,20,16,.6)';
     ctx.lineWidth = 2.4;
@@ -783,21 +915,28 @@ function draw(now) {
   }
 
   // dots
-  const ds = 26;
+  for (const d of dots) d.show = d.team === BLUE || seen(d.x, d.y);
   for (const d of dots) {
+    if (!d.show) continue;
+    const ds = d.u.size + 6;
     const bob = d.idle ? Math.sin(T * 3 + d.wob) * 0.6 : 0;
-    ctx.drawImage(dotSprites[d.team], d.x - ds / 2, d.y - ds / 2 + bob, ds, ds);
-    if (d.hit > 0) { ctx.fillStyle = 'rgba(255,255,255,.6)'; ctx.beginPath(); ctx.arc(d.x, d.y + bob, 11, 0, 7); ctx.fill(); }
+    ctx.drawImage(dotSprites[d.team + d.kind], d.x - ds / 2, d.y - ds / 2 + bob, ds, ds);
+    if (d.hit > 0) { ctx.fillStyle = 'rgba(255,255,255,.6)'; ctx.beginPath(); ctx.arc(d.x, d.y + bob, d.u.size * 0.45, 0, 7); ctx.fill(); }
   }
-  // health bars and dig-in shields
+  // health bars, high-ground chevrons and dig-in shields
   for (const d of dots) {
-    const bx = d.x - 11, by = d.y - 20;
-    ctx.fillStyle = 'rgba(10,16,36,.7)'; ctx.fillRect(bx - 1, by - 1, 24, 5);
-    const f = clamp(d.hp / DOT_HP, 0, 1);
+    if (!d.show) continue;
+    const hw = d.kind === 'tank' ? 30 : 22, bx = d.x - hw / 2, by = d.y - d.u.size / 2 - 8;
+    ctx.fillStyle = 'rgba(10,16,36,.7)'; ctx.fillRect(bx - 1, by - 1, hw + 2, 5);
+    const f = clamp(d.hp / d.u.hp, 0, 1);
     ctx.fillStyle = f > 0.6 ? '#5ee05a' : f > 0.3 ? '#ffd23c' : '#ff5a4a';
-    ctx.fillRect(bx, by, 22 * f, 3);
+    ctx.fillRect(bx, by, hw * f, 3);
+    if (d.high) {
+      ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(bx - 9, by + 3); ctx.lineTo(bx - 5.5, by - 1); ctx.lineTo(bx - 2, by + 3); ctx.stroke();
+    }
     if (d.shield) {
-      const sx = d.x + 10, sy = d.y - 9;
+      const sx = d.x + d.u.size * 0.4, sy = d.y - d.u.size * 0.35;
       ctx.fillStyle = '#ffc93c'; ctx.strokeStyle = 'rgba(80,50,0,.85)'; ctx.lineWidth = 1.2;
       ctx.beginPath(); ctx.moveTo(sx, sy - 6); ctx.lineTo(sx + 5.5, sy - 4); ctx.lineTo(sx + 5, sy + 1.5);
       ctx.quadraticCurveTo(sx + 3.5, sy + 5, sx, sy + 7); ctx.quadraticCurveTo(sx - 3.5, sy + 5, sx - 5, sy + 1.5);
@@ -807,13 +946,18 @@ function draw(now) {
   // shots
   ctx.lineCap = 'round';
   for (const u of bullets) {
-    ctx.strokeStyle = u.team === BLUE ? 'rgba(170,210,255,.9)' : 'rgba(255,190,150,.9)'; ctx.lineWidth = 3;
+    if (u.team === RED && !seen(u.x, u.y)) continue;
+    ctx.strokeStyle = u.team === BLUE ? 'rgba(170,210,255,.9)' : 'rgba(255,190,150,.9)'; ctx.lineWidth = u.big ? 5 : 3;
     ctx.beginPath(); ctx.moveTo(u.px, u.py); ctx.lineTo(u.x, u.y); ctx.stroke();
-    ctx.fillStyle = '#fffbe0'; ctx.beginPath(); ctx.arc(u.x, u.y, 2.6, 0, 7); ctx.fill();
+    ctx.fillStyle = u.big ? '#ffb347' : '#fffbe0'; ctx.beginPath(); ctx.arc(u.x, u.y, u.big ? 4 : 2.6, 0, 7); ctx.fill();
   }
 
   // bases
   for (const b of bases) drawBase(b, T);
+
+  // fog of war over everything blue cannot see
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(fogCv, -GS / 2, -GS / 2, GX * GS, GY * GS);
 
   // strikes
   for (const s of strikes) {
